@@ -1,0 +1,9 @@
+name: doa_mm
+dependencies:
+  - python
+  - numpy
+  - scipy
+  - matplotlib
+  - pip
+  - pip:
+    - pyroomacoustics
