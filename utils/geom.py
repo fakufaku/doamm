@@ -1,6 +1,37 @@
 import numpy as np
 
 
+def cartesian_to_spherical(p):
+    """
+    Parameters
+    ----------
+    p: array_like, shape (3, n_points)
+        A collection of vectors
+
+    Returns
+    -------
+    doa: ndarray, shape (2, n_points)
+        The (colatitude, azimuth) pairs giving the direction of the vectors
+    r: ndarray, shape (n_points,)
+        The norms of the vectors
+    """
+
+    r = np.linalg.norm(p, axis=0)
+    u = p / r[None, :]
+
+    doa = np.zeros((2, p.shape[1]), dtype=p.dtype)
+
+    # colatitude
+    doa[0, :] = np.arctan2(np.sqrt(p[0, :] ** 2 + p[1, :] ** 2), p[2, :])
+
+    # azimuths
+    doa[1, :] = np.arctan2(p[1, :], p[0, :])
+    I = doa[1, :] < 0
+    doa[1, I] = 2 * np.pi + doa[1, I]
+
+    return doa, r
+
+
 def spherical_to_cartesian(doa, distance, ref=None):
     """
     Transform spherical coordinates to cartesian
@@ -31,7 +62,7 @@ def spherical_to_cartesian(doa, distance, ref=None):
     assert doa.shape[1] == 2
     assert distance.ndim < 3
 
-    R = np.zeros((3, doa.shape[1]), dtype=doa.dtype)
+    R = np.zeros((3, doa.shape[0]), dtype=doa.dtype)
 
     R[0, :] = np.cos(doa[:, 1]) * np.sin(doa[:, 0])
     R[1, :] = np.sin(doa[:, 1]) * np.sin(doa[:, 0])
