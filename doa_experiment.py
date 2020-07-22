@@ -28,7 +28,7 @@ from scipy.signal import fftconvolve
 import pyroomacoustics as pra
 from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
-# from external_spire_mm import SPIRE_MM
+from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
@@ -37,15 +37,16 @@ from utils import arrays, geom, metrics
 #######################
 # add external modules
 pra.doa.algorithms["MDSBF"] = MDSBF
-# pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
+pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
 pra.doa.algorithms["DOAMM"] = DOAMM
 
 #######################
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(40, 60)  # FFT bins to use for estimation
-algo_names = ["SRP", "MUSIC", "DOAMM"]
+freq_bins = np.arange(10, 60)  # FFT bins to use for estimation
+# algo_names = ["SRP", "MUSIC", "MDSBF", "SPIRE_MM", "DOAMM"]
+algo_names = ["DOAMM"]
 #######################
 
 #########################
@@ -132,6 +133,9 @@ for rep in range(n_repeat):
     ##############################################
     # Now we can test all the algorithms available
 
+    n_grid_init = 10000
+    n_mm_iter = 10
+
     for algo_name in algo_names:
         # Construct the new DOA object
         # the max_four parameter is necessary for FRIDA only
@@ -141,12 +145,25 @@ for rep in range(n_repeat):
             stft_nfft,
             dim=3,
             c=c,
-            measurement_type=Measurement.XCORR,
-            beta=4.0,
-            n_iter=10,
-            track_cost=False,
-            init_grid=250,
+            # MUSIC/SRP parameters
             n_grid=500,
+            # DOA-MM parameters
+            measurement_type=Measurement.XCORR,
+            beta=1.0,
+            n_iter=n_mm_iter,
+            track_cost=True,
+            init_grid=n_grid_init,
+            verbose=True,
+            # SPIRE parameters
+            n_bisec_search=8,
+            n_rough_grid=n_grid_init,
+            n_mm_iterations=n_mm_iter,
+            mic_positions=R.T,
+            mic_pairs=[
+                [m1, m2]
+                for m1 in range(R.shape[1] - 1)
+                for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
+            ],
         )
 
         # this call here perform localization on the frames in X
@@ -154,6 +171,11 @@ for rep in range(n_repeat):
         doa.locate_sources(X, num_src=n_sources, freq_bins=freq_bins)
         t2 = time.perf_counter()
 
+        # wrap azimuth in positive orthant
+        I = doa.azimuth_recon < 0.0
+        doa.azimuth_recon[I] = 2.0 * np.pi + doa.azimuth_recon[I]
+
+        # pack
         estimate = np.c_[doa.colatitude_recon, doa.azimuth_recon]
 
         rmse, perm = metrics.doa_eval(doas[rep], estimate)
@@ -174,4 +196,4 @@ for rep in range(n_repeat):
             plt.plot(doa.cost)
             plt.show()
         except:
-            pass
+            plt.close()

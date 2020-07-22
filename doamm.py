@@ -3,7 +3,7 @@ from enum import Enum
 import numpy as np
 
 import pyroomacoustics as pra
-from unit_irls import unit_irls
+from unit_ls import unit_ls
 from utils import geom
 
 
@@ -12,15 +12,17 @@ class Measurement(Enum):
     XCORR = "x-corr"
 
 
-def doa_mm_cost_per_bin(q, mics, data, beta=1.0):
+def doa_mm_cost_per_bin(q, mics, wavenumbers, data, beta=1.0):
     """
     Parameters
     ----------
     q: array_like, shape (n_dim)
         the current propagation vector estimate
-    mics: array_like, shape (n_points, n_mics, n_dim)
+    mics: array_like, shape (n_mics, n_dim)
         the regression vectors corresponding to the microphone locations
         weighted by the wavenumbers
+    wavenumbers: ndarray, shape (n_points)
+        the wavenumbers corresponding to each data bin
     data: array_like, shape (n_points, n_mics)
         the phase of the measurements
     beta: float
@@ -32,11 +34,13 @@ def doa_mm_cost_per_bin(q, mics, data, beta=1.0):
         the cost associated with each data point
     """
 
-    c = (0.5 * (1 + np.mean(np.cos(data - mics @ q), axis=-1))) ** beta
+    delta_t = mics @ q
+    e = data - wavenumbers[:, None] @ delta_t[None, :]
+    c = (0.5 * (1 + np.mean(np.cos(e), axis=-1))) ** beta
     return c
 
 
-def doa_mm_cost(q, clusters, mics, data, beta=1.0):
+def doa_mm_cost(q, clusters, mics, wavenumbers, data, beta=1.0):
     """
     Parameters
     ----------
@@ -44,9 +48,11 @@ def doa_mm_cost(q, clusters, mics, data, beta=1.0):
         the current propagation vector estimate
     clusters: list of array_like
         each element of the list is a list of the bins belonging to a cluster
-    mics: array_like, shape (n_points, n_mics, n_dim)
+    mics: array_like, shape (n_mics, n_dim)
         the regression vectors corresponding to the microphone locations
         weighted by the wavenumbers
+    wavenumbers: ndarray, shape (n_points)
+        the wavenumbers corresponding to each data bin
     data: array_like, shape (n_points, n_mics)
         the phase of the measurements
     beta: float
@@ -60,21 +66,22 @@ def doa_mm_cost(q, clusters, mics, data, beta=1.0):
 
     c = 0.0
     for q, S in zip(q, clusters):
-        c += np.sum(doa_mm_cost_per_bin(q, mics[S, :, :], data[S, :], beta=beta))
+        c += np.sum(doa_mm_cost_per_bin(q, mics, wavenumbers[S], data[S, :], beta=beta))
 
     return c
 
 
-def doa_mm_auxiliary_variables(q, mics, data, beta=1.0):
+def doa_mm_auxiliary_variables(q, mics, wavenumbers, data, beta=1.0):
     """
     Parameters
     ----------
     q: array_like, shape (n_dim)
         the current propagation vector estimate
-    mics: array_like, shape (n_points, n_mics, n_dim)
-        the regression vectors corresponding to the microphone locations
-        weighted by the wavenumbers
-    data: array_like, shape (n_points, n_mics)
+    mics: ndarray, shape (n_mics, n_dim)
+        the location of the microphones
+    wavenumbers: ndarray, shape (n_points)
+        the wavenumbers corresponding to each data bin
+    data: ndarray, shape (n_points, n_mics)
         the phase of the measurements
     beta: float
         exponent of the robustifying function
@@ -86,11 +93,13 @@ def doa_mm_auxiliary_variables(q, mics, data, beta=1.0):
     weights: ndarray, shape (n_points, n_mics)
         the new weights
     """
-    n_points, n_mics, n_dim = mics.shape
+    n_mics, n_dim = mics.shape
+    n_points, _ = data.shape
 
     weights = np.zeros_like(data)
 
-    e = data - mics @ q
+    delta_t = mics @ q  # shape (n_mics)
+    e = data - wavenumbers[:, None] @ delta_t[None, :]  # shape (n_points, n_mics)
 
     # compute the offset to pi
     z = np.round(e / (2 * np.pi))
@@ -105,9 +114,8 @@ def doa_mm_auxiliary_variables(q, mics, data, beta=1.0):
     # this the time-frequency bin weight corresponding to the robustifying function
     # shape (n_points)
     if beta > 1.0:
-        r = 0.5 * (1.0 + np.mean(np.cos(data - mics @ q), axis=-1))
+        r = 0.5 * (1.0 + np.mean(np.cos(e), axis=-1))
         weights *= beta * r[:, None] ** (beta - 1)
-        # weights *= r[:, None] > 0.9
 
     return new_data, weights
 
@@ -173,7 +181,7 @@ class DOAMM(pra.doa.DOA):
         self._init_doa = pra.doa.MUSIC(
             L, fs, nfft, c=c, num_src=num_src, dim=dim, n_grid=init_grid
         )
-        self.verbose = False
+        self.verbose = verbose
 
         L = np.array(L)
 
@@ -209,11 +217,59 @@ class DOAMM(pra.doa.DOA):
 
         return X.reshape(X.shape[:-2] + (X.shape[-2] * X.shape[-1],))[..., mask]
 
-    def _cost(self, qs, clusters, mics, data):
+    def _cost(self, qs, clusters, mics, wavenumbers, data):
         """ Compute the cost of the function """
-        return doa_mm_cost(qs, clusters, mics, data, beta=self.beta)
+        return doa_mm_cost(qs, clusters, mics, wavenumbers, data, beta=self.beta)
 
-    def _recompute_clusters(self, qs, mics, data):
+    def _recompute_centers(
+        self, qs, clusters, mics, wavenumbers, data, n_iter=1,
+    ):
+        """
+        Parameters
+        ----------
+        qs: array_like, shape (n_clusters, n_dim)
+            the cluster direction vectors
+        clusters: list of ndarray
+            each entry in the list is the list of indices belonging to a cluster
+        mics: ndarray, shape (n_mics, n_dim)
+            the location of the microphones
+        wavenumbers: ndarray, shape (n_points)
+            the wavenumbers corresponding to each data bin
+        data: ndarray, shape (n_points, n_mics)
+            the phase of the measurements
+        """
+
+        n_clusters = len(clusters)
+        n_points, n_mics = data.shape
+        n_mics, n_dim = mics.shape
+        assert wavenumbers.shape[0] == n_points
+
+        # buffers
+        weights = np.zeros((n_clusters, n_mics), dtype=data.dtype)
+        rhs = np.zeros((n_clusters, n_mics), dtype=data.dtype)
+
+        # broadcast the microphone matrix to the same size as weights and RHS
+        mics_bc = np.broadcast_to(mics, (n_clusters, n_mics, n_dim))
+
+        for epoch in range(n_iter):
+
+            for i, (q, S) in enumerate(zip(qs, clusters)):
+
+                new_data, new_weights = doa_mm_auxiliary_variables(
+                    q, mics, wavenumbers[S], data[S, :], beta=self.beta
+                )
+
+                weights[i, :] = np.sum(new_weights * wavenumbers[S, None] ** 2, axis=0)
+                rhs[i, :] = (
+                    np.sum(new_data * new_weights * wavenumbers[S, None], axis=0)
+                    / weights[i, :]
+                )
+
+            qs[:] = unit_ls(mics_bc, rhs, weights=weights, tol=1e-8, max_iter=1000)
+
+        return qs, epoch
+
+    def _recompute_clusters(self, qs, mics, wavenumbers, data):
         """
         Parameters
         ----------
@@ -222,21 +278,31 @@ class DOAMM(pra.doa.DOA):
         mics: array_like, shape (n_points, n_mics, n_dim)
             the regression vectors corresponding to the microphone locations
             weighted by the wavenumbers
+        wavenumbers: array_like, shape (n_points)
+            the wavenumber for the data points
         data: array_like, shape (n_points, n_mics)
             the phase of the measurements
         """
-        n_points, n_mics, n_dim = mics.shape
+        n_mics, n_dim = mics.shape
+        n_points, _ = data.shape
         n_clusters = qs.shape[0]
 
         cost_per_bin = np.zeros((n_clusters, n_points))
         for i, q in enumerate(qs):
-            cost_per_bin[i, :] = doa_mm_cost_per_bin(q, mics, data, beta=self.beta)
+            cost_per_bin[i, :] = doa_mm_cost_per_bin(
+                q, mics, wavenumbers, data, beta=self.beta
+            )
 
         best_q = np.argmax(cost_per_bin, axis=0)
 
         clusters = []
         for i, q in enumerate(qs):
-            clusters.append(np.where(best_q == i)[0])
+            S = np.where(best_q == i)[0]
+            clusters.append(S)
+            ## here is how to only include 10% best fit
+            # bestest = np.argsort(cost_per_bin[i, S])
+            # n_best = int(0.1 * len(S))  # select best 10%
+            # clusters.append(S[bestest[-n_best:]])
 
         return clusters
 
@@ -253,22 +319,24 @@ class DOAMM(pra.doa.DOA):
 
         return q_init
 
-    def _doa_mm_run(self, qs0, mics, data):
+    def _doa_mm_run(self, qs0, mics, wavenumbers, data):
         """ Run the DOA/clustering """
 
         # initialize the algorithm
         qs = qs0
-        clusters = self._recompute_clusters(qs, mics, data)
+        clusters = self._recompute_clusters(qs, mics, wavenumbers, data)
 
-        doa, r = geom.cartesian_to_spherical(qs.T)
         if self.verbose:
+            doa, r = geom.cartesian_to_spherical(qs.T)
             print("Initial:")
             print(
-                f"  colatitude={np.degrees(doa[0, :])} azimuth={np.degrees(doa[1, :])} r = {r}"
+                f"  colatitude={np.degrees(doa[0, :])}\n"
+                f"  azimuth=   {np.degrees(doa[1, :])}\n"
+                f"  clust_size={[len(S) for S in clusters]}\n"
             )
 
         if self._track_cost:
-            c = self._cost(qs, clusters, mics, data)
+            c = self._cost(qs, clusters, mics, wavenumbers, data)
             self.cost = [c]
             if self.verbose:
                 print(f"  cost {c}")
@@ -277,29 +345,23 @@ class DOAMM(pra.doa.DOA):
         for epoch in range(self.n_iter):
 
             # Re-estimate cluster centers
-            for i, (q, bin_list) in enumerate(zip(qs, clusters)):
-                new_q, _ = unit_irls(
-                    q,
-                    mics[bin_list, :, :],
-                    data[bin_list, :],
-                    doa_mm_auxiliary_variables,
-                    n_iter=1,
-                    secular_n_iter=1000,
-                    secular_tol=1e-8,
-                )
-                q[:] = new_q
+            qs[:], _ = self._recompute_centers(
+                qs, clusters, mics, wavenumbers, data, n_iter=1
+            )
 
-            doa, r = geom.cartesian_to_spherical(qs.T)
+            clusters = self._recompute_clusters(qs, mics, wavenumbers, data)
+
             if self.verbose:
+                doa, r = geom.cartesian_to_spherical(qs.T)
                 print(f"Epoch {epoch}")
                 print(
-                    f"  colatitude={np.degrees(doa[0, :])} azimuth={np.degrees(doa[1, :])} r = {r}"
+                    f"  colatitude={np.degrees(doa[0, :])}\n"
+                    f"  azimuth=   {np.degrees(doa[1, :])}\n"
+                    f"  clust_size={[len(S) for S in clusters]}\n"
                 )
 
-            clusters = self._recompute_clusters(qs, mics, data)
-
             if self._track_cost:
-                c = self._cost(qs, clusters, mics, data)
+                c = self._cost(qs, clusters, mics, wavenumbers, data)
                 self.cost.append(c)
                 if self.verbose:
                     print(f"  cost: {c}")
@@ -329,8 +391,10 @@ class DOAMM(pra.doa.DOA):
         # shape (n_freq, n_frames, n_channels)
         X_ = X[:, self.freq_bins, :].transpose([1, 2, 0])
 
-        # the wavenumbers (n_freq)
-        wavenum = 2 * np.pi * self.freq_hz / self.c
+        # the wavenumbers (n_freq * n_frames)
+        wavenumbers = np.broadcast_to(
+            2 * np.pi * self.freq_hz[:, None] / self.c, (n_freq, n_frames)
+        ).flatten()
 
         # First, we need to compute the measurements
         if self._measurements == Measurement.XCORR:
@@ -339,13 +403,10 @@ class DOAMM(pra.doa.DOA):
             # n_mics = n_channels * (n_channels - 1) / 2
             n_mics = self._L_diff.shape[1]
 
-            # shape (n_freq, n_frames, n_mics, n_dim)
-            mics = np.broadcast_to(
-                wavenum[:, None, None, None] * self._L_diff.T[None, None, :, :],
-                (n_freq, n_frames, n_mics, n_dim),
-            ).reshape((-1, n_mics, n_dim))
+            # shape (n_mics, n_dim)
+            mics = self._L_diff.T
 
-            # shape (n_freq * n_frames * n_mics)
+            # shape (n_freq * n_frames, n_mics)
             data = np.angle(
                 self._extract_off_diagonal(
                     X_[..., :, None] @ np.conjugate(X_[..., None, :])
@@ -355,10 +416,7 @@ class DOAMM(pra.doa.DOA):
         elif self._measurements == Measurement.DIRECT:
 
             n_mics = self.L.shape[1]
-            mics = np.broadcast_to(
-                wavenum[:, None, None, None] * self.L.T[None, None, :, :],
-                (n_freq, n_frames, n_mics, n_dim),
-            ).reshape((-1, n_mics, n_dim))
+            mics = self.L.T
 
             # shape (n_freq * n_frames * n_mics)
             data = np.angle(X_).reshape((-1, n_mics))
@@ -367,18 +425,32 @@ class DOAMM(pra.doa.DOA):
             raise ValueError("Invalid measurement type.")
 
         # init with grid based doa method
-        self._init_doa.locate_sources(X, num_src=self.num_src, freq_bins=self.freq_bins)
-        qs0 = geom.spherical_to_cartesian(
+        num_src_init = self.num_src
+        self._init_doa.locate_sources(X, num_src=num_src_init, freq_bins=self.freq_bins)
+        qs = geom.spherical_to_cartesian(
             doa=np.c_[self._init_doa.colatitude_recon, self._init_doa.azimuth_recon],
-            distance=np.ones(self.num_src),
+            distance=np.ones(num_src_init),
         ).T
+
+        # init with a simple grid
+        # qs = pra.doa.GridSphere(n_points=self._init_doa.grid.n_points).cartesian.T
+
         # qs = self._cluster_center_init(mics, data)
 
         # Run the DOA algorithm
-        qs, self.clusters = self._doa_mm_run(qs0, mics, data)
+        qs, self.clusters = self._doa_mm_run(qs, mics, wavenumbers, data)
+
+        # sort the clusters by size
+        the_clusters = [
+            {"center": q, "bins": bins} for q, bins in zip(qs, self.clusters)
+        ]
+        sorted(the_clusters, key=lambda S: len(S["bins"]), reverse=True)
+
+        qs_sel = np.vstack([S["center"] for S in the_clusters[: self.num_src]])
 
         # Now we need to convert to azimuth/doa
-        self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
+        # self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
+        self._doa_recon, _ = geom.cartesian_to_spherical(qs_sel.T)
 
         # self.plot(self.clusters, mics, data)
 
@@ -416,7 +488,9 @@ class DOAMM(pra.doa.DOA):
                 cost = []
                 for q in qs:
                     c = np.mean(
-                        doa_mm_cost_per_bin(q, mics[S, :, :], data[S, :], self.beta)
+                        doa_mm_cost_per_bin(
+                            q, mics, wavenumbers[S, :], data[S, :], self.beta
+                        )
                     )
                     cost.append(c)
                 # import pdb
