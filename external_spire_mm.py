@@ -988,6 +988,15 @@ class SPIRE_MM(DOA):
         for n in range(self.grid.n_points):
             spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index_buf == n)
 
+        """
+        # Same code, but with a kd-tree (Robin version)
+        tree = spatial.cKDTree(self.grid.cartesian.T)
+        _, nn = tree.query(position_vector.reshape((-1, position_vector.shape[-1])))
+        bin_indices, bin_count = np.unique(nn, return_counts=True)
+        spire_cost = np.zeros(self.grid.n_points, dtype=np.int)
+        spire_cost[bin_indices] = bin_count
+        """
+
         self.grid.set_values(spire_cost)
 
     def _process_org(self, X):
@@ -1623,7 +1632,7 @@ def coplanar_least_squares_st_norm_one(
 def linear_least_squares_st_norm_one(a, r, alpha, feature_index=0, eps=1.0e-18):
     # cov: batch,feature,feature
     feature_num = np.shape(a)[-1]
-    if feature_num is not 2:
+    if feature_num != 2:
         print("dimension error")
 
     coef = np.sqrt(feature_num)

@@ -3,6 +3,7 @@ from enum import Enum
 import numpy as np
 
 import pyroomacoustics as pra
+from external_mdsbf import MDSBF
 from unit_ls import unit_ls
 from utils import geom
 
@@ -181,6 +182,11 @@ class DOAMM(pra.doa.DOA):
         self._init_doa = pra.doa.MUSIC(
             L, fs, nfft, c=c, num_src=num_src, dim=dim, n_grid=init_grid
         )
+        """
+        self._init_doa = MDSBF(
+            L, fs, nfft, c=c, num_src=num_src, dim=dim, n_grid=init_grid
+        )
+        """
         self.verbose = verbose
 
         L = np.array(L)
@@ -213,7 +219,10 @@ class DOAMM(pra.doa.DOA):
         # we need to format the sensors
         M = X.shape[-1]
         indices = np.arange(M)
-        mask = np.where(indices[:, None] > indices[None, :])
+
+        mask = np.ravel_multi_index(
+            np.where(indices[:, None] > indices[None, :]), (M, M)
+        )
 
         return X.reshape(X.shape[:-2] + (X.shape[-2] * X.shape[-1],))[..., mask]
 
@@ -300,9 +309,10 @@ class DOAMM(pra.doa.DOA):
             S = np.where(best_q == i)[0]
             clusters.append(S)
             ## here is how to only include 10% best fit
-            # bestest = np.argsort(cost_per_bin[i, S])
             # n_best = int(0.1 * len(S))  # select best 10%
+            # bestest = np.argsort(cost_per_bin[i, S])
             # clusters.append(S[bestest[-n_best:]])
+            # clusters.append(np.random.choice(S, size=n_best, replace=False))
 
         return clusters
 
@@ -431,9 +441,11 @@ class DOAMM(pra.doa.DOA):
             doa=np.c_[self._init_doa.colatitude_recon, self._init_doa.azimuth_recon],
             distance=np.ones(num_src_init),
         ).T
+        """
 
         # init with a simple grid
-        # qs = pra.doa.GridSphere(n_points=self._init_doa.grid.n_points).cartesian.T
+        qs = pra.doa.GridSphere(n_points=self._init_doa.grid.n_points).cartesian.T
+        """
 
         # qs = self._cluster_center_init(mics, data)
 

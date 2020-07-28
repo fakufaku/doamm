@@ -30,6 +30,7 @@ from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
+from musicmm import MMUSIC
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -39,14 +40,17 @@ from utils import arrays, geom, metrics
 pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
 pra.doa.algorithms["DOAMM"] = DOAMM
+pra.doa.algorithms["MMUSIC"] = MMUSIC
 
 #######################
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(10, 60)  # FFT bins to use for estimation
-# algo_names = ["SRP", "MUSIC", "MDSBF", "SPIRE_MM", "DOAMM"]
-algo_names = ["DOAMM"]
+freq_bins = np.arange(6, 7)  # FFT bins to use for estimation
+algo_names = ["SRP", "MUSIC", "SPIRE_MM", "DOAMM"]
+# algo_names = ["DOAMM"]
+# algo_names = ["MDSBF"]
+algo_names = ["MUSIC", "MMUSIC"]
 #######################
 
 #########################
@@ -65,12 +69,18 @@ n_sources = 2
 n_repeat = 1
 
 # random number seed
+seed = 1691531260
 seed = None
 #########################
 
 # Fix randomness
 if seed is not None:
     np.random.seed(seed)
+else:
+    print("New random seed")
+    seed = np.random.randint(2 ** 31)
+    np.random.seed(seed)
+print(f"The seed is {seed}")
 
 # get the file names
 files = sampling(n_repeat, n_sources, os.path.join(samples_dir, "metadata.json"))
@@ -94,12 +104,16 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-# R = R[:, ::5]
+R = R[:, ::8]
 
 for rep in range(n_repeat):
 
     # Create an anechoic room
-    room = pra.ShoeBox(room_dim, fs=fs, max_order=0)
+    e_abs, max_order = pra.inverse_sabine(0.6, room_dim)
+    max_order = 0
+    room = pra.ShoeBox(
+        room_dim, fs=fs, max_order=max_order, materials=pra.Material(e_abs)
+    )
 
     # We use a circular array with radius 15 cm # and 12 microphones
     room.add_microphone_array(pra.MicrophoneArray(R, fs=room.fs))
@@ -121,6 +135,8 @@ for rep in range(n_repeat):
 
     # run the simulation
     room.simulate(snr=SNR)
+    mean_rt60 = np.mean(room.measure_rt60())
+    print(f"Room RT60 {mean_rt60}")
 
     ################################
     # Compute the STFT frames needed
@@ -133,7 +149,7 @@ for rep in range(n_repeat):
     ##############################################
     # Now we can test all the algorithms available
 
-    n_grid_init = 10000
+    n_grid_init = 250
     n_mm_iter = 10
 
     for algo_name in algo_names:
@@ -146,14 +162,14 @@ for rep in range(n_repeat):
             dim=3,
             c=c,
             # MUSIC/SRP parameters
-            n_grid=500,
+            n_grid=10000,
             # DOA-MM parameters
-            measurement_type=Measurement.XCORR,
-            beta=1.0,
+            s=1.0,
+            beta=3.0,
             n_iter=n_mm_iter,
-            track_cost=True,
             init_grid=n_grid_init,
-            verbose=True,
+            track_cost=True,
+            verbose=False,
             # SPIRE parameters
             n_bisec_search=8,
             n_rough_grid=n_grid_init,
@@ -193,7 +209,7 @@ for rep in range(n_repeat):
 
         try:
             plt.figure()
-            plt.plot(doa.cost)
+            plt.plot(np.array(doa.cost).T)
             plt.show()
         except:
             plt.close()
