@@ -30,7 +30,7 @@ from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from musicmm import MMUSIC
+from mmusic import MMUSIC
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -46,11 +46,11 @@ pra.doa.algorithms["MMUSIC"] = MMUSIC
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(6, 7)  # FFT bins to use for estimation
-algo_names = ["SRP", "MUSIC", "SPIRE_MM", "DOAMM"]
+freq_bins = np.arange(6, 60)  # FFT bins to use for estimation
+algo_names = ["SRP", "MUSIC", "SPIRE_MM", "DOAMM", "MMUSIC"]
 # algo_names = ["DOAMM"]
 # algo_names = ["MDSBF"]
-algo_names = ["MUSIC", "MMUSIC"]
+# algo_names = ["MUSIC", "MMUSIC"]
 #######################
 
 #########################
@@ -64,7 +64,7 @@ room_dim = np.r_[10.0, 10.0, 10.0]  # room dimensions
 mic_array_name = "pyramic"
 
 # number of sources to simulate
-n_sources = 2
+n_sources = 3
 # Number of loops in the simulation
 n_repeat = 1
 
@@ -104,13 +104,13 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::8]
+R = R[:, ::2]
 
 for rep in range(n_repeat):
 
     # Create an anechoic room
     e_abs, max_order = pra.inverse_sabine(0.6, room_dim)
-    max_order = 0
+    # max_order = 0
     room = pra.ShoeBox(
         room_dim, fs=fs, max_order=max_order, materials=pra.Material(e_abs)
     )
@@ -162,13 +162,13 @@ for rep in range(n_repeat):
             dim=3,
             c=c,
             # MUSIC/SRP parameters
-            n_grid=10000,
+            n_grid=1000,
             # DOA-MM parameters
             s=1.0,
-            beta=3.0,
+            beta=1.0,
             n_iter=n_mm_iter,
             init_grid=n_grid_init,
-            track_cost=True,
+            track_cost=False,
             verbose=False,
             # SPIRE parameters
             n_bisec_search=8,
@@ -208,8 +208,9 @@ for rep in range(n_repeat):
         print()
 
         try:
-            plt.figure()
-            plt.plot(np.array(doa.cost).T)
-            plt.show()
+            if len(doa.cost) > 0:
+                plt.figure()
+                plt.plot(np.array(doa.cost).T)
+                plt.show()
         except:
             plt.close()

@@ -3,12 +3,12 @@ import numpy as np
 
 
 def f(x, a, b, c, func="cos"):
+    assert func in ["cos", "sin"], "Only cos/sin are supported"
+
     if func == "cos":
         ftrig = np.cos
     elif func == "sin":
         ftrig = np.sin
-    else:
-        raise ValueError("Only cos/sin are supported")
 
     return np.sum(c[:, None] * ftrig(b[:, None] - a[:, None] * x[None, :]), axis=0)
 
@@ -27,43 +27,27 @@ def f_aux(x, x0, a, b, c, func="cos"):
     c: ndarray, shape (n_terms)
         Parameter 1
     """
+    assert func in ["cos", "sin"], "Only cos/sin are supported"
+
     I = c > 0
 
     if func == "cos":
         e = b - a * x0  # (n_terms, n_points)
+    elif func == "sin":
+        e = 0.5 * np.pi - (b - a * x0)
 
-        # handle positive terms separately
-        e[I] = np.pi - e[I]
+    # handle positive terms separately
+    e[I] = np.pi - e[I]
 
-        z = np.round(e / (2.0 * np.pi))
-        zpi = 2 * z * np.pi
-        phi = e - zpi
+    z = np.round(e / (2.0 * np.pi))
+    zpi = 2 * z * np.pi
+    phi = e - zpi
 
+    if func == "cos":
         y = b - zpi
         y[I] = b[I] + zpi[I] - np.pi
 
-        """
-        w = -0.5 * c * np.sinc(phi / np.pi)
-        w[I] *= -1.0
-
-        const = -c * (np.cos(phi) + 0.5 * phi * np.sin(phi))
-        const[I] *= -1.0
-
-        aux = np.sum(
-            w[:, None] * (y[:, None] - a[:, None] * x[None, :]) ** 2 - const[:, None],
-            axis=0,
-        )
-        """
-
-    if func == "sin":
-
-        e = 0.5 * np.pi - (b - a * x0)
-        e[I] = np.pi - e[I]
-
-        z = np.round(e / (2.0 * np.pi))
-        zpi = 2 * z * np.pi
-        phi = e - zpi
-
+    elif func == "sin":
         y = b + zpi - 0.5 * np.pi
         y[I] = b[I] - zpi[I] + 0.5 * np.pi
 

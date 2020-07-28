@@ -78,33 +78,39 @@ def mmusic_auxiliary_variables(q, mics, wavenumbers, data, s=1.0):
     n_freq, _ = data.shape
 
     weights = np.zeros_like(data)
+    new_data = np.zeros_like(data)
+    e = np.zeros_like(data)
+
+    I = data > 0.0
 
     delta_t = mics @ q  # shape (n_mics)
-    e = wavenumbers[:, None] @ delta_t[None, :]  # shape (n_freq, n_mics)
+    e_base = wavenumbers[:, None] @ delta_t[None, :]
+    e[:, :n_mics] = e_base  # shape (n_freq, n_mics)
+    e[:, n_mics:] = 0.5 * np.pi - e[:, :n_mics]
+
+    e[I] = np.pi - e[I]
 
     # compute the offset to pi
-    z_cos = np.round((np.pi - e) / (2 * np.pi))
-    new_data_cos = (1 - 2 * z_cos) * np.pi
-    phi_cos = new_data_cos - e
-
-    # compute the offset to pi
-    z_sin = np.round((0.5 * np.pi + e) / (2 * np.pi))
-    new_data_sin = (0.5 - 2 * z_sin) * np.pi
-    phi_sin = new_data_sin + e
-
-    # stick together the two sides
-    new_data = np.concatenate((-new_data_cos, -new_data_sin), axis=-1)
-    phi = np.concatenate((phi_cos, phi_sin), axis=-1)
+    z = np.round(e / (2.0 * np.pi))
+    zpi = 2 * z * np.pi
+    phi = e - zpi
 
     # adjust right-hand side
+    new_data[:, :n_mics] = zpi[:, :n_mics]
+    I_up = I[:, :n_mics]
+    new_data[:, :n_mics][I_up] = np.pi - zpi[:, :n_mics][I_up]
+
+    new_data[:, n_mics:] = 0.5 * np.pi - zpi[:, n_mics:]
+    I_down = I[:, n_mics:]
+    new_data[:, n_mics:][I_down] = zpi[:, n_mics:][I_down] - 0.5 * np.pi
 
     # compute the weights
-    weights[:] = np.sinc(phi / np.pi) * data
+    weights[:] = np.abs(data) * np.sinc(phi / np.pi)
 
     # this the time-frequency bin weight corresponding to the robustifying function
     # shape (n_points)
     if s < 1.0:
-        E = np.concatenate((np.cos(e), np.sin(e)), axis=-1)
+        E = np.concatenate((np.cos(e_base), np.sin(e_base)), axis=-1)
         ell = n_mics + 2 * np.sum(data * E, axis=-1)
         r = (1.0 / n_freq) * ell ** (s - 1.0) / np.mean(ell ** s) ** (1.0 - 1.0 / s)
         weights *= r[:, None]
@@ -321,10 +327,10 @@ class MMUSIC(pra.doa.MUSIC):
         mod_vec = np.transpose(
             np.array(self.mode_vec[self.freq_bins, :, :]), axes=[2, 0, 1]
         )
-        self.Pssl = 1.0 / np.linalg.norm(
+        self.Pssl = np.linalg.norm(
             np.conj(mod_vec[:, :, None, :]) @ En[None, :, :], axis=(-1, -2)
         )
-        self.grid.set_values(np.mean(self.Pssl, axis=-1))
+        self.grid.set_values(1.0 / power_mean(self.Pssl, s=self.s, axis=1))
 
         # find the peaks for the initial estimate
         self.src_idx = self.grid.find_peaks(k=self.num_src)
@@ -357,7 +363,7 @@ class MMUSIC(pra.doa.MUSIC):
         # self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
         self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
 
-        self.plot(mics, wavenumbers, data, En)
+        # self.plot(mics, wavenumbers, data, En)
 
     def locate_sources(self, *args, **kwargs):
 
