@@ -48,6 +48,7 @@ stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
 freq_bins = np.arange(6, 60)  # FFT bins to use for estimation
 algo_names = ["SRP", "MUSIC", "SPIRE_MM", "DOAMM", "MMUSIC"]
+# algo_names = ["SRP", "MUSIC", "MMUSIC"]
 # algo_names = ["DOAMM"]
 # algo_names = ["MDSBF"]
 # algo_names = ["MUSIC", "MMUSIC"]
@@ -64,12 +65,12 @@ room_dim = np.r_[10.0, 10.0, 10.0]  # room dimensions
 mic_array_name = "pyramic"
 
 # number of sources to simulate
-n_sources = 3
+n_sources = 2
 # Number of loops in the simulation
 n_repeat = 1
 
 # random number seed
-seed = 1691531260
+seed = 1784850191
 seed = None
 #########################
 
@@ -104,12 +105,12 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::2]
+R = R[:, ::8]
 
 for rep in range(n_repeat):
 
     # Create an anechoic room
-    e_abs, max_order = pra.inverse_sabine(0.6, room_dim)
+    e_abs, max_order = pra.inverse_sabine(0.8, room_dim)
     # max_order = 0
     room = pra.ShoeBox(
         room_dim, fs=fs, max_order=max_order, materials=pra.Material(e_abs)
@@ -120,6 +121,7 @@ for rep in range(n_repeat):
 
     # read source signals
     signals = wav_read_center(files[rep], center=True, seed=0)
+    # signals = signals[:, signals.shape[1] // 4 : signals.shape[1] // 4 + stft_nfft * 10]
 
     # source locations
     source_locations = geom.spherical_to_cartesian(
@@ -164,7 +166,7 @@ for rep in range(n_repeat):
             # MUSIC/SRP parameters
             n_grid=1000,
             # DOA-MM parameters
-            s=1.0,
+            s=-1.0,
             beta=1.0,
             n_iter=n_mm_iter,
             init_grid=n_grid_init,
@@ -208,7 +210,7 @@ for rep in range(n_repeat):
         print()
 
         try:
-            if len(doa.cost) > 0:
+            if doa._track_cost:
                 plt.figure()
                 plt.plot(np.array(doa.cost).T)
                 plt.show()

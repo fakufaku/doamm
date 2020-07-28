@@ -250,21 +250,6 @@ class MMUSIC(pra.doa.MUSIC):
         # broadcast the microphone matrix to the same size as weights and RHS
         mics_bc = np.broadcast_to(mics, (1, n_mics, n_dim))
 
-        if self.verbose:
-            doa, r = geom.cartesian_to_spherical(qs.T)
-            print(f"Initialization")
-            print(
-                f"  colatitude={np.degrees(doa[0, :])}\n"
-                f"  azimuth=   {np.degrees(doa[1, :])}\n"
-            )
-
-        if self._track_cost:
-            self.cost.append([])
-            c = self._cost(qs[0], mics, wavenumbers, data)
-            self.cost[-1].append(c)
-            if self.verbose:
-                print(f"  cost: {c}")
-
         for epoch in range(n_iter):
 
             new_data, new_weights = mmusic_auxiliary_variables(
@@ -278,20 +263,6 @@ class MMUSIC(pra.doa.MUSIC):
             rhs[0, :] = (r_red[:n_mics] + r_red[n_mics:]) / weights[0, :]
 
             qs[:] = unit_ls(mics_bc, rhs, weights=weights, tol=1e-8, max_iter=1000)
-
-            if self.verbose:
-                doa, r = geom.cartesian_to_spherical(qs.T)
-                print(f"Epoch {epoch}")
-                print(
-                    f"  colatitude={np.degrees(doa[0, :])}\n"
-                    f"  azimuth=   {np.degrees(doa[1, :])}\n"
-                )
-
-            if self._track_cost:
-                c = self._cost(qs[0], mics, wavenumbers, data)
-                self.cost[-1].append(c)
-                if self.verbose:
-                    print(f"  cost: {c}")
 
         return qs[0], epoch
 
@@ -353,11 +324,29 @@ class MMUSIC(pra.doa.MUSIC):
         data = np.concatenate((np.real(v_c), np.imag(v_c)), axis=-1)
 
         # Run the DOA algoritm
-        self.cost = []
-        for k, q in enumerate(qs):
-            qs[k, :], epochs = self._optimize_direction(
-                q, mics, wavenumbers, data, n_iter=self.n_iter
-            )
+        self.cost = [[] for k in range(self.num_src)]
+
+        for epoch in range(self.n_iter):
+
+            for k, q in enumerate(qs):
+
+                qs[k, :], epochs = self._optimize_direction(
+                    q, mics, wavenumbers, data, n_iter=1,
+                )
+
+                if self.verbose:
+                    doa, r = geom.cartesian_to_spherical(qs[k, None, :].T)
+                    print(f"Epoch {epoch} Source {k}")
+                    print(
+                        f"  colatitude={np.degrees(doa[0, :])}\n"
+                        f"  azimuth=   {np.degrees(doa[1, :])}\n"
+                    )
+
+                if self._track_cost:
+                    c = self._cost(qs[k], mics, wavenumbers, data)
+                    self.cost[k].append(c)
+                    if self.verbose:
+                        print(f"  cost: {c}")
 
         # Now we need to convert to azimuth/doa
         # self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
@@ -398,44 +387,6 @@ class MMUSIC(pra.doa.MUSIC):
                 cost.append(c)
 
             return np.array(cost)
-
-        def func_cost2(x, y, z):
-            qs = np.c_[x, y, z]  # shape (n_grid, 3)
-
-            # conventional method
-            dt1 = qs @ self.L  # shape (n_grid, n_mics)
-            mv = np.exp(
-                2j * np.pi * self.freq_hz[None, :, None] * dt1[:, None, :] / self.c
-            )  # shape (n_grid, n_freq, n_mics)
-
-            ell1 = (
-                np.linalg.norm(
-                    mv[:, :, None, :] @ np.conj(En[None, :, :, :]), axis=(-2, -1)
-                )
-                ** 2
-            )  # shape (n_grid, n_freq)
-            cost1 = power_mean(ell1, s=self.s, axis=-1)
-
-            # new method
-            dt2 = qs @ self._L_diff  # shape (n_grid, n_mics)
-            e = 2 * np.pi * self.freq_hz[None, :, None] * dt2[:, None, :] / self.c
-            mvr = np.concatenate((np.cos(e), np.sin(e)), axis=-1,)
-
-            # shape (n_grid, n_freq, n_mics)
-
-            # shape (n_freq, n_mics)
-            EE = En @ np.conj(En).swapaxes(-2, -1)
-            v_c = self._extract_off_diagonal(0.5 * (EE + np.conj(EE.swapaxes(-2, -1))))
-            v_ri = np.concatenate((np.real(v_c), np.imag(v_c)), axis=-1)
-            diag_const = np.sum(np.linalg.norm(En, axis=-1) ** 2, axis=1)
-
-            ell2 = diag_const + 2 * np.sum(
-                v_ri[None, :, :] * mvr, axis=-1
-            )  # shape (n_grid, n_freq)
-
-            cost2 = power_mean(ell2, s=self.s, axis=-1)
-
-            return cost2
 
         grid.apply(func_cost)
 
