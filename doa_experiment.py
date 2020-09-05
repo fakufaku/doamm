@@ -30,7 +30,7 @@ from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from mmusic import MMUSIC
+from mmusic import MMUSIC, MMUSICType
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -46,8 +46,10 @@ pra.doa.algorithms["MMUSIC"] = MMUSIC
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(6, 60)  # FFT bins to use for estimation
-algo_names = ["SRP", "MUSIC", "SPIRE_MM", "DOAMM", "MMUSIC"]
+freq_bins = np.arange(6, 150)  # FFT bins to use for estimation
+
+# DOA-MM parameters
+
 # algo_names = ["SRP", "MUSIC", "MMUSIC"]
 # algo_names = ["DOAMM"]
 # algo_names = ["MDSBF"]
@@ -105,7 +107,7 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::8]
+R = R[:, ::4]
 
 for rep in range(n_repeat):
 
@@ -151,38 +153,55 @@ for rep in range(n_repeat):
     ##############################################
     # Now we can test all the algorithms available
 
-    n_grid_init = 250
-    n_mm_iter = 10
+    n_grid = 10000
 
-    for algo_name in algo_names:
+    others = {}
+    algorithms = {
+        "SRP": {"name": "SRP", "kwargs": {"n_grid": n_grid},},
+        "MUSIC": {"name": "MUSIC", "kwargs": {"n_grid": n_grid},},
+        "MMUSIC-Lin": {
+            "name": "MMUSIC",
+            "kwargs": {
+                "n_grid": n_grid,
+                "s": -1.0,
+                "n_iter": 30,
+                "track_cost": False,
+                "verbose": False,
+                "mm_type": MMUSICType.Linear,
+            },
+        },
+        "MMUSIC-Quad": {
+            "name": "MMUSIC",
+            "kwargs": {
+                "n_grid": n_grid,
+                "s": -1.0,
+                "n_iter": 30,
+                "track_cost": False,
+                "verbose": False,
+                "mm_type": MMUSICType.Quadratic,
+            },
+        },
+        "SPIRE_MM": {
+            "name": "SPIRE_MM",
+            "kwargs": {
+                "n_grid": n_grid,
+                "n_bisec_search": 8,
+                "n_rough_grid": 250,
+                "n_mm_iterations": 10,
+                "mic_positions": R.T,
+                "mic_pairs": [
+                    [m1, m2]
+                    for m1 in range(R.shape[1] - 1)
+                    for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
+                ],
+            },
+        },
+    }
+
+    for variant_name, p in algorithms.items():
         # Construct the new DOA object
         # the max_four parameter is necessary for FRIDA only
-        doa = pra.doa.algorithms[algo_name](
-            R,
-            fs,
-            stft_nfft,
-            dim=3,
-            c=c,
-            # MUSIC/SRP parameters
-            n_grid=1000,
-            # DOA-MM parameters
-            s=-1.0,
-            beta=1.0,
-            n_iter=n_mm_iter,
-            init_grid=n_grid_init,
-            track_cost=False,
-            verbose=False,
-            # SPIRE parameters
-            n_bisec_search=8,
-            n_rough_grid=n_grid_init,
-            n_mm_iterations=n_mm_iter,
-            mic_positions=R.T,
-            mic_pairs=[
-                [m1, m2]
-                for m1 in range(R.shape[1] - 1)
-                for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
-            ],
-        )
+        doa = pra.doa.algorithms[p["name"]](R, fs, stft_nfft, dim=3, c=c, **p["kwargs"])
 
         # this call here perform localization on the frames in X
         t1 = time.perf_counter()
@@ -198,21 +217,23 @@ for rep in range(n_repeat):
 
         rmse, perm = metrics.doa_eval(doas[rep], estimate)
 
-        print(f"Algorithm: {algo_name}")
+        print(f"Algorithm: {variant_name}")
         print(f"Computation time {t2 - t1:.6f}")
         print("Co est:", np.degrees(doa.colatitude_recon[perm]))
         print("Co  gt:", np.degrees(doas[rep][:, 0]))
         print("Az est:", np.degrees(doa.azimuth_recon[perm]))
         print("Az  gt:", np.degrees(doas[rep][:, 1]))
 
-        print(f"{algo_name} Error:", np.degrees(rmse))
-        print(f"{algo_name} Total:", np.degrees(np.mean(rmse)))
+        print(f"{variant_name} Error:", np.degrees(rmse))
+        print(f"{variant_name} Total:", np.degrees(np.mean(rmse)))
         print()
 
         try:
             if doa._track_cost:
                 plt.figure()
+                plt.title(variant_name)
                 plt.plot(np.array(doa.cost).T)
+                plt.xlabel("MM Iterations")
                 plt.show()
         except:
             plt.close()

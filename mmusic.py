@@ -8,6 +8,11 @@ from unit_ls import unit_ls
 from utils import geom
 
 
+class MMUSICType(Enum):
+    Linear = 0
+    Quadratic = 1
+
+
 def power_mean(X, s=1.0, *args, **kwargs):
 
     if s != 1.0:
@@ -52,7 +57,7 @@ def mmusic_cost(q, mics, wavenumbers, data, s=1.0):
     return cost
 
 
-def mmusic_auxiliary_variables(q, mics, wavenumbers, data, s=1.0):
+def mmusic_cosine_majorization(q, mics, wavenumbers, data, s=1.0):
     """
     Parameters
     ----------
@@ -115,7 +120,14 @@ def mmusic_auxiliary_variables(q, mics, wavenumbers, data, s=1.0):
         r = (1.0 / n_freq) * ell ** (s - 1.0) / np.mean(ell ** s) ** (1.0 - 1.0 / s)
         weights *= r[:, None]
 
-    return new_data, weights
+    # We can reduce the number of terms by completing the squares
+    w_red = np.sum(weights * wavenumbers[:, None] ** 2, axis=0)
+    weights_red = w_red[:n_mics] + w_red[n_mics:]
+
+    r_red = np.sum(new_data * weights * wavenumbers[:, None], axis=0)
+    data_red = (r_red[:n_mics] + r_red[n_mics:]) / weights_red
+
+    return data_red, weights_red
 
 
 class MMUSIC(pra.doa.MUSIC):
@@ -157,7 +169,8 @@ class MMUSIC(pra.doa.MUSIC):
         nfft,
         c=343.0,
         num_src=1,
-        s=1.0,
+        s=-1.0,
+        mm_type=MMUSICType.Quadratic,
         mode="far",
         dim=None,
         n_iter=30,
@@ -171,6 +184,7 @@ class MMUSIC(pra.doa.MUSIC):
         The init method
         """
         self.s = s
+        self.mm_type = mm_type
         self.n_iter = n_iter
         self._track_cost = track_cost
         self.verbose = verbose
@@ -193,6 +207,10 @@ class MMUSIC(pra.doa.MUSIC):
         self._L_diff = self._extract_off_diagonal(
             self.L[:, :, None] - self.L[:, None, :]
         )
+
+        # for the linear type algorithm, we need
+        self._L_diff2 = self._L_diff @ self._L_diff.T
+        self.ev_max = np.max(np.linalg.eigvals(self._L_diff2))
 
     def _extract_off_diagonal(self, X):
         """
@@ -252,17 +270,31 @@ class MMUSIC(pra.doa.MUSIC):
 
         for epoch in range(n_iter):
 
-            new_data, new_weights = mmusic_auxiliary_variables(
+            # new_data.shape == ()
+            # new_weights.shape == ()
+            # the applies the cosine majorization
+            new_data, new_weights = mmusic_cosine_majorization(
                 qs[0], mics, wavenumbers, data, s=self.s
             )
 
-            w_red = np.sum(new_weights * wavenumbers[:, None] ** 2, axis=0)
-            weights[0, :] = w_red[:n_mics] + w_red[n_mics:]
+            if self.mm_type == MMUSICType.Quadratic:
+                qs[:] = unit_ls(
+                    mics_bc,
+                    new_data[None, :],
+                    weights=new_weights[None, :],
+                    tol=1e-8,
+                    max_iter=1000,
+                )
+            elif self.mm_type == MMUSICType.Linear:
+                C = np.max(new_weights) * self.ev_max
+                y = self._L_diff @ (new_data * new_weights).T
+                Lq = self._L_diff @ (new_weights[:, None] * (self._L_diff.T @ qs.T))
 
-            r_red = np.sum(new_data * new_weights * wavenumbers[:, None], axis=0)
-            rhs[0, :] = (r_red[:n_mics] + r_red[n_mics:]) / weights[0, :]
+                # compute new direction
+                qs[...] = y.T - Lq.T + C * qs
 
-            qs[:] = unit_ls(mics_bc, rhs, weights=weights, tol=1e-8, max_iter=1000)
+                # apply norm constraint
+                qs /= np.linalg.norm(qs, axis=1, keepdims=True)
 
         return qs[0], epoch
 
