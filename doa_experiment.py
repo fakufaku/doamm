@@ -30,7 +30,7 @@ from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from mmusic import MMUSIC, MMUSICType
+from mmusic import MMSRP, MMUSIC, MMUSICType
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -41,12 +41,13 @@ pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
 pra.doa.algorithms["DOAMM"] = DOAMM
 pra.doa.algorithms["MMUSIC"] = MMUSIC
+pra.doa.algorithms["MMSRP"] = MMSRP
 
 #######################
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(6, 100)  # FFT bins to use for estimation
+freq_bins = np.arange(6, 101)  # FFT bins to use for estimation
 
 # DOA-MM parameters
 
@@ -107,7 +108,7 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::4]
+R = R[:, ::8]
 
 for rep in range(n_repeat):
 
@@ -153,9 +154,10 @@ for rep in range(n_repeat):
     ##############################################
     # Now we can test all the algorithms available
 
-    n_grid = 10000
+    n_grid = 1000
+    s = 1.0
+    mm_iter = 30
 
-    others = {}
     algorithms = {
         "SRP": {"name": "SRP", "kwargs": {"n_grid": n_grid},},
         "MUSIC": {"name": "MUSIC", "kwargs": {"n_grid": n_grid},},
@@ -163,9 +165,9 @@ for rep in range(n_repeat):
             "name": "MMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
-                "s": 1.0,
-                "n_iter": 30,
-                "track_cost": False,
+                "s": s,
+                "n_iter": mm_iter,
+                "track_cost": True,
                 "verbose": False,
                 "mm_type": MMUSICType.Linear,
             },
@@ -174,27 +176,50 @@ for rep in range(n_repeat):
             "name": "MMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
-                "s": 1.0,
-                "n_iter": 30,
-                "track_cost": False,
+                "s": s,
+                "n_iter": mm_iter,
+                "track_cost": True,
                 "verbose": False,
                 "mm_type": MMUSICType.Quadratic,
             },
         },
-        "SPIRE_MM": {
-            "name": "SPIRE_MM",
+        "MMSRP-Lin": {
+            "name": "MMSRP",
             "kwargs": {
                 "n_grid": n_grid,
-                "n_bisec_search": 8,
-                "n_rough_grid": 250,
-                "n_mm_iterations": 10,
-                "mic_positions": R.T,
-                "mic_pairs": [
-                    [m1, m2]
-                    for m1 in range(R.shape[1] - 1)
-                    for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
-                ],
+                "s": s,
+                "n_iter": mm_iter,
+                "track_cost": True,
+                "verbose": False,
+                "mm_type": MMUSICType.Linear,
             },
+        },
+        "MMSRP-Quad": {
+            "name": "MMSRP",
+            "kwargs": {
+                "n_grid": n_grid,
+                "s": s,
+                "n_iter": mm_iter,
+                "track_cost": True,
+                "verbose": False,
+                "mm_type": MMUSICType.Quadratic,
+            },
+        },
+    }
+
+    algorithms["SPIRE_MM"] = {
+        "name": "SPIRE_MM",
+        "kwargs": {
+            "n_grid": n_grid,
+            "n_bisec_search": 8,
+            "n_rough_grid": 250,
+            "n_mm_iterations": 10,
+            "mic_positions": R.T,
+            "mic_pairs": [
+                [m1, m2]
+                for m1 in range(R.shape[1] - 1)
+                for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
+            ],
         },
     }
 
