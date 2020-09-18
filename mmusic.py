@@ -499,6 +499,11 @@ class MMSRP(MMUSIC):
         # here the minus sign is to account for the change of maximization
         # into minimization
         data = self._extract_off_diagonal(-C_hat)
+
+        # we apply this to reduce the largest eigenvalue to below 1.0
+        l_max = np.max(np.sum(np.abs(C_hat), axis=-1), axis=-1)
+        data /= l_max[:, None]
+
         # separate into magnitude and phase
         data_mag = np.abs(data)
         data_arg = np.angle(data)

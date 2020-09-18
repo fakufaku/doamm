@@ -108,7 +108,7 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::8]
+R = R[:, ::4]
 
 for rep in range(n_repeat):
 
@@ -207,6 +207,7 @@ for rep in range(n_repeat):
         },
     }
 
+    """
     algorithms["SPIRE_MM"] = {
         "name": "SPIRE_MM",
         "kwargs": {
@@ -222,6 +223,7 @@ for rep in range(n_repeat):
             ],
         },
     }
+    """
 
     for variant_name, p in algorithms.items():
         # Construct the new DOA object
