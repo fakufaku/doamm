@@ -236,562 +236,6 @@ class SPIRE_MM(DOA):
                 self.L, self.fs, self.nfft, self.c, self.rough_grid
             )
 
-    def _process_old2(self, X):
-        """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
-        spectrum.
-        """
-        # 周波数毎に実施する
-        ones = np.ones(self.L.shape[1])
-
-        spire_cost = np.zeros(self.grid.n_points)
-
-        # 初期のポジションベクトル
-        n_channels = np.shape(X)[0]
-        n_freq_bins = np.shape(X)[1]
-        n_frames = np.shape(X)[2]
-
-        d = None
-        n_mic_pair = 0
-        # for m1 in range(1):
-
-        step = 2
-
-        mic_pairs = [
-            [m1, m2]
-            for m1 in range(n_channels - 1)
-            for m2 in range(m1 + 1, np.minimum(m1 + step + 1, n_channels))
-        ]
-        mic_pairs = np.array(mic_pairs)
-
-        n_mic_pair = np.shape(mic_pairs)[0]
-        d = np.array(self.mic_positions[mic_pairs[:, 1]]) - np.array(
-            self.mic_positions[mic_pairs[:, 0]]
-        )
-        # d: n_mic_pair,dim
-        print(np.shape(d))
-
-        # for m1 in range(n_channels-1):
-        #    for m2 in range(m1+1,np.minimum(m1+step+1,n_channels)):
-        # for m2 in range(m1+1,n_channels):
-        # print(m1,m2)
-        #        n_mic_pair=n_mic_pair+1
-        #        d_temp=np.array(self.mic_positions[m2])-np.array(self.mic_positions[m1])
-
-        #        d_temp=d_temp[:self.dim]
-        #        if d is None:
-        #            d=d_temp[np.newaxis,:]
-        #        else:
-        #            d=np.concatenate((d,d_temp[np.newaxis,:]),axis=0)
-        # d: n_mic_pair, dim
-        # sigma: n_mic_pair, freq,time
-
-        print("hogehoge")
-
-        rough_azimuth_recon = self.rough_grid.azimuth[0:10]
-        rough_colatitude_recon = self.rough_grid.colatitude[0:10]
-        rough_ele = np.pi / 2 - rough_colatitude_recon
-
-        x = np.cos(rough_azimuth_recon) * np.cos(rough_ele)
-        y = np.sin(rough_azimuth_recon) * np.cos(rough_ele)
-        z = np.sin(rough_ele)
-        x = np.reshape(x, [-1, 1])
-        y = np.reshape(y, [-1, 1])
-        z = np.reshape(z, [-1, 1])
-
-        source_position = np.concatenate([x, y, z], axis=1)
-
-        print(source_position)
-
-        print(
-            np.concatenate(
-                [
-                    self.rough_grid.x[0:10, None],
-                    self.rough_grid.y[0:10, None],
-                    self.rough_grid.z[0:10, None],
-                ],
-                axis=1,
-            )
-        )
-
-        a = gsv.obtain_steering_vector(
-            self.mic_positions, 3.0 * source_position, self.freq_hz, useAmp=False
-        )
-        # 10,55,48
-        print(np.shape(a))
-
-        mode_vec = self.rough_mode_vec[self.freq_bins, :, 0:10]
-        print(np.shape(mode_vec))
-
-        print(a[5, 20, :] / a[5, 20, 0])
-        print(mode_vec[20, :, 5] / mode_vec[20, 0, 5])
-
-        # 時間周波数毎の初期のポジションベクトル
-        position_vector = np.zeros(shape=(n_freq_bins, n_frames, self.dim))
-
-        freq_index = 0
-
-        for k in self.freq_bins:
-            # n_mic_pair=0
-            # sigma=None
-            # for m1 in range(1):
-
-            # for m1 in range(n_channels):
-            #   for m2 in range(m1+1,n_channels):
-            sigma = np.angle(X[mic_pairs[:, 1], k, :] / X[mic_pairs[:, 0], k, :])
-            # print(np.shape(sigma))
-
-            # for m1 in range(n_channels-1):
-            #    for m2 in range(m1+1,np.minimum(m1+step+1,n_channels)):
-            # print(m1,m2)
-            #        n_mic_pair=n_mic_pair+1
-            #        sigma_temp=np.angle(X[m2,k,:]/X[m1,k,:])
-            #
-            #        if sigma is None:
-            #            sigma=sigma_temp[np.newaxis,:]
-            #        else:
-            #            sigma=np.concatenate((sigma,sigma_temp[np.newaxis,:]),axis=0)
-            # print(np.shape(sigma))
-            sigma = np.transpose(sigma, (1, 0))
-
-            sigma = np.where(
-                np.abs(sigma) < 1.0e-18, np.zeros_like(sigma) + 1.0e-18, sigma
-            )
-
-            z = np.zeros(shape=(n_frames, n_mic_pair), dtype=np.int)
-            x = np.random.normal(size=n_frames * n_mic_pair)
-            x = np.reshape(x, newshape=(n_frames, n_mic_pair))
-
-            # 初期化
-
-            # print(k)
-            # k=np.array(k,dtype=np.int)
-
-            mode_vec = self.rough_mode_vec[k, :, :]
-            mode_vec = np.conjugate(mode_vec)
-            # print(mode_vec)
-            prod = np.einsum("mi,mt->ti", mode_vec, X[:, k, :])
-            # prod=np.einsum("mi,mt->ti",mode_vec,X[:,k,:])
-            amp = np.abs(prod)
-            # print(k,np.max(amp))
-            index = np.argmax(amp, axis=-1)
-
-            # indexに相当する方向を取る
-            if self.dim == 2:
-                rough_azimuth_recon = self.rough_grid.azimuth[index]
-                # ダミー
-                rough_colatitude_recon = np.zeros_like(rough_azimuth_recon) + np.pi
-            elif self.dim == 3:
-                rough_azimuth_recon = self.rough_grid.azimuth[index]
-                rough_colatitude_recon = self.rough_grid.colatitude[index]
-
-            doas = np.concatenate(
-                (
-                    rough_colatitude_recon[:, None],  # colatitude [0, pi]
-                    rough_azimuth_recon[:, None],  # azimuth [0, 2 pi]
-                ),
-                axis=-1,
-            )
-            distance = 3.0
-
-            # source_locations: 3, n_frames
-            source_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-
-            position_vector[k, :, :] = source_locations[: self.dim, :].T
-
-            size = np.einsum(
-                "ti,ti->t",
-                np.conjugate(position_vector[k, :, :]),
-                position_vector[k, :, :],
-            )
-            size = np.sqrt(size)[..., np.newaxis]
-            position_vector[k, :, :] = position_vector[k, :, :] / np.maximum(
-                size, 1.0e-18
-            )
-
-            use_clustering = False
-            cluster_index = None
-            cluster_center = None
-
-            print("start")
-            d_temp = d
-            est_p = position_vector[k : k + 1, ...]
-            z = z[None, ...]
-            x = x[None, ...]
-            sigma = sigma[None, ...]
-            freqs = self.freq_hz[freq_index : freq_index + 1]
-            cluster_index = None
-
-            for i in range(self.n_mm_itertaions):
-                #
-                (
-                    org_cost_0,
-                    org_cost_1,
-                    org_cost_2,
-                    org_cost_3,
-                    cost_0,
-                    cost_1,
-                    cost_2,
-                    cost_3,
-                    est_p,
-                    z,
-                    x,
-                ) = doa_estimation_one_iteration(
-                    d_temp,
-                    est_p,
-                    sigma,
-                    z,
-                    x,
-                    freqs,
-                    use_clustering=use_clustering,
-                    cluster_index=cluster_index,
-                    cluster_center=cluster_center,
-                    iter_num2=self.n_bisec_search,
-                )
-                # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
-                # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
-                # print(cost_0,cost_1,cost_2,cost_3)
-            # est_pから
-            # fti
-
-            position_vector[k, ...] = est_p[0, ...]
-
-            freq_index = freq_index + 1
-
-        size = np.einsum("fti,fti->ft", np.conjugate(position_vector), position_vector)
-        size = np.sqrt(size)[..., np.newaxis]
-        position_vector = position_vector / np.maximum(size, 1.0e-18)
-
-        # gridを探す
-
-        # position_vectorに相当する方向を取る
-        if self.dim == 2:
-            azimuth_recon = self.grid.azimuth
-            # ダミー
-            colatitude_recon = np.zeros_like(azimuth_recon) + np.pi
-        elif self.dim == 3:
-            azimuth_recon = self.grid.azimuth
-            colatitude_recon = self.grid.colatitude
-
-        doas = np.concatenate(
-            (
-                colatitude_recon[:, None],  # colatitude [0, pi]
-                azimuth_recon[:, None],  # azimuth [0, 2 pi]
-            ),
-            axis=-1,
-        )
-        distance = 3.0
-        # source_locations: 3, n_grid_num
-        grid_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-        size = np.einsum("in,in->n", np.conjugate(grid_locations), grid_locations)
-        size = np.sqrt(size)[np.newaxis, ...]
-        grid_locations = grid_locations / np.maximum(size, 1.0e-18)
-
-        # kd treeを使って探索
-        tree = spatial.KDTree(grid_locations.T)
-        _, grid_index = tree.query(position_vector)
-        for n in range(self.grid.n_points):
-            spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index == n)
-
-        # for k in self.freq_bins:
-        #    print(k)
-        #    prod=np.einsum("in,ti->tn",grid_locations,position_vector[k,...])
-        #    grid_index=np.argmax(prod,axis=-1)
-
-        #    for n in range(self.grid.n_points):
-        #        spire_cost[n]=spire_cost[n]+np.count_nonzero(grid_index==n)
-
-        self.grid.set_values(spire_cost)
-
-    def _process_debug(self, X):
-        """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
-        spectrum.
-        """
-        # 周波数毎に実施する
-        ones = np.ones(self.L.shape[1])
-
-        spire_cost = np.zeros(self.grid.n_points)
-
-        # 初期のポジションベクトル
-        n_channels = np.shape(X)[0]
-        n_freq_bins = np.shape(X)[1]
-        n_frames = np.shape(X)[2]
-
-        d = None
-        n_mic_pair = 0
-        # for m1 in range(1):
-
-        step = 2
-
-        mic_pairs = [
-            [m1, m2]
-            for m1 in range(n_channels - 1)
-            for m2 in range(m1 + 1, np.minimum(m1 + step + 1, n_channels))
-        ]
-        mic_pairs = np.array(mic_pairs)
-
-        n_mic_pair = np.shape(mic_pairs)[0]
-        d = np.array(self.mic_positions[mic_pairs[:, 1]]) - np.array(
-            self.mic_positions[mic_pairs[:, 0]]
-        )
-        # d: n_mic_pair,dim
-        print(np.shape(d))
-
-        print("hogehoge")
-
-        rough_azimuth_recon = self.rough_grid.azimuth[0:10]
-        rough_colatitude_recon = self.rough_grid.colatitude[0:10]
-        rough_ele = np.pi / 2 - rough_colatitude_recon
-
-        x = np.cos(rough_azimuth_recon) * np.cos(rough_ele)
-        y = np.sin(rough_azimuth_recon) * np.cos(rough_ele)
-        z = np.sin(rough_ele)
-        x = np.reshape(x, [-1, 1])
-        y = np.reshape(y, [-1, 1])
-        z = np.reshape(z, [-1, 1])
-
-        source_position = np.concatenate([x, y, z], axis=1)
-
-        # print(source_position)
-
-        # print(np.concatenate([self.rough_grid.x[0:10,None],self.rough_grid.y[0:10,None],self.rough_grid.z[0:10,None]],axis=1))
-        rough_grid_temp = np.concatenate(
-            [
-                self.rough_grid.x[0:10, None],
-                self.rough_grid.y[0:10, None],
-                self.rough_grid.z[0:10, None],
-            ],
-            axis=1,
-        )
-
-        temp_mode = ModeVector2(
-            self.mic_positions.T, 16000, 256, 343, self.grid, mode="far"
-        )
-
-        # source_positionとrough_gridのx,y,zは等しい
-        source_position_org = [
-            [0.42440754, 0.43631269, 2.93760267],
-            [1.35210912, -0.83474138, -2.54460365],
-        ]
-        source_position = source_position_org
-        # 一番近い，vectorを見つけて，そのsteeringvectorを可視化してみる。
-        grid_temp = np.concatenate(
-            [self.grid.x[:, None], self.grid.y[:, None], self.grid.z[:, None]], axis=1
-        )
-
-        size = np.einsum("im,im->i", np.conjugate(grid_temp), grid_temp)
-        size = np.sqrt(size)[..., np.newaxis]
-        grid_temp = grid_temp / np.maximum(size, 1.0e-18)
-
-        size = np.einsum("im,im->i", np.conjugate(source_position), source_position)
-        size = np.sqrt(size)[..., np.newaxis]
-        source_position = source_position / np.maximum(size, 1.0e-18)
-
-        prod = np.einsum("im,sm->si", grid_temp, source_position)
-        source_index = np.argmax(prod, axis=-1)
-        print("index")
-        print(source_index)
-        print(grid_temp[source_index])
-
-        mode_vec = temp_mode[self.freq_bins, :, source_index]
-        print(np.angle(mode_vec[:, 40, :] / mode_vec[:, 41, :]))
-
-        mode_vec = self.mode_vec[self.freq_bins, :, source_index]
-        print(np.angle(mode_vec[:, 40, :] / mode_vec[:, 41, :]))
-
-        a = gsv.obtain_steering_vector(
-            self.mic_positions,
-            300.0 * np.array(source_position_org),
-            self.freq_hz,
-            useAmp=False,
-            SOUND_SPEED=343,
-        )
-        # b=gsv.obtain_steering_vector(self.mic_positions,3.*rough_grid_temp,self.freq_hz,useAmp=False)
-        # 10,55,48
-        print(np.shape(a))
-        print(np.angle(a[:, :, 40] / a[:, :, 41]))
-
-        mode_vec = self.rough_mode_vec[self.freq_bins, :, 0:10]
-        mode_vec2 = temp_mode[self.freq_bins, :, 0:10]
-
-        # print(np.shape(mode_vec))
-
-        # print(a[5,20,:]/a[5,20,0])
-        # print(b[5,20,:]/b[5,20,0])
-        # print(mode_vec[20,:,5]/mode_vec[20,0,5])
-        # print(mode_vec2[20,:,5]/mode_vec2[20,0,5])
-
-        inner_prod1 = np.einsum("fai,aif->", a, mode_vec)
-        inner_prod2 = np.einsum("fai,aif->", np.conjugate(a), mode_vec)
-        print(np.sum(np.abs(inner_prod1)))
-        print(np.sum(np.abs(inner_prod2)))
-
-        # 時間周波数毎の初期のポジションベクトル
-        position_vector = np.zeros(shape=(n_freq_bins, n_frames, self.dim))
-
-        X_temp = X[:, self.freq_bins, :]
-        import time as time
-
-        print(np.average(np.angle(X[40, ...] / X[41, ...]), axis=-1))
-
-        start = time.time()
-        sigma = np.angle(X_temp[mic_pairs[:, 1], ...] / X_temp[mic_pairs[:, 0], ...])
-        sigma = np.transpose(sigma, (1, 2, 0))
-        elapsed_time = time.time() - start
-        print(elapsed_time)
-        sigma = np.where(np.abs(sigma) < 1.0e-18, np.zeros_like(sigma) + 1.0e-18, sigma)
-        z = np.zeros(shape=(n_freq_bins, n_frames, n_mic_pair), dtype=np.int)
-        x = np.random.normal(size=n_freq_bins * n_frames * n_mic_pair)
-        x = np.reshape(x, newshape=(n_freq_bins, n_frames, n_mic_pair))
-        # 初期化
-        mode_vec = self.rough_mode_vec[self.freq_bins, :, :]
-        mode_vec = np.conjugate(mode_vec)
-        # print(mode_vec)
-        prod = np.einsum("fmi,mft->fti", mode_vec, X[:, self.freq_bins, :])
-        # prod=np.einsum("mi,mt->ti",mode_vec,X[:,k,:])
-        amp = np.abs(prod)
-        # print(k,np.max(amp))
-        # ft
-        index = np.argmax(amp, axis=-1)
-        org_shape = np.shape(index)
-        index = np.reshape(index, [-1])
-
-        # indexに相当する方向を取る
-        if self.dim == 2:
-            rough_azimuth_recon = self.rough_grid.azimuth[index]
-            # ダミー
-            rough_colatitude_recon = np.zeros_like(rough_azimuth_recon) + np.pi
-        elif self.dim == 3:
-            rough_azimuth_recon = self.rough_grid.azimuth[index]
-            rough_colatitude_recon = self.rough_grid.colatitude[index]
-
-        doas = np.concatenate(
-            (
-                rough_colatitude_recon[:, None],  # colatitude [0, pi]
-                rough_azimuth_recon[:, None],  # azimuth [0, 2 pi]
-            ),
-            axis=-1,
-        )
-        distance = 3.0
-
-        # source_locations: 3, n_frames
-        source_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-        source_locations = np.reshape(source_locations, (3, org_shape[0], org_shape[1]))
-
-        position_vector[self.freq_bins, :, :] = np.transpose(
-            source_locations[: self.dim, :, :], (1, 2, 0)
-        )
-
-        size = np.einsum("fti,fti->ft", np.conjugate(position_vector), position_vector)
-        size = np.sqrt(size)[..., np.newaxis]
-        position_vector = position_vector / np.maximum(size, 1.0e-18)
-
-        use_clustering = False
-        cluster_index = np.random.randint(0, self.num_src, size=n_freq_bins * n_frames)
-        cluster_index = np.reshape(cluster_index, (n_freq_bins, n_frames))
-        cluster_center = np.random.normal(size=self.num_src * self.dim)
-        cluster_center = np.reshape(cluster_center, newshape=(self.num_src, self.dim))
-        size = np.einsum("ci,ci->c", np.conjugate(cluster_center), cluster_center)
-        size = np.sqrt(size)[..., np.newaxis]
-        cluster_center = cluster_center / np.maximum(size, 1.0e-18)
-        if use_clustering == True:
-            # pを作る
-            for k in self.freq_bins:
-                for l in range(n_frames):
-                    position_vector[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        # print("start")
-        est_p = position_vector[self.freq_bins, ...]
-        z = z[self.freq_bins, ...]
-        x = x[self.freq_bins, ...]
-        freqs = self.freq_hz
-        cluster_index = cluster_index[self.freq_bins, ...]
-
-        silent_mode = True
-        freqs_d = np.einsum("f,pi->fpi", freqs, d)
-        for i in range(self.n_mm_itertaions):
-            #
-            (
-                org_cost_0,
-                org_cost_1,
-                org_cost_2,
-                org_cost_3,
-                cost_0,
-                cost_1,
-                cost_2,
-                cost_3,
-                est_p,
-                z,
-                x,
-            ) = doa_estimation_one_iteration(
-                freqs_d,
-                est_p,
-                sigma,
-                z,
-                x,
-                use_clustering=use_clustering,
-                cluster_index=cluster_index,
-                cluster_center=cluster_center,
-                iter_num2=self.n_bisec_search,
-                silent_mode=silent_mode,
-            )
-            # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
-            # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
-            if silent_mode == False:
-                print(cost_0, cost_1, cost_2, cost_3)
-        # est_pから
-        # fti
-        position_vector[self.freq_bins, ...] = est_p
-
-        size = np.einsum("fti,fti->ft", np.conjugate(position_vector), position_vector)
-        size = np.sqrt(size)[..., np.newaxis]
-        position_vector = position_vector / np.maximum(size, 1.0e-18)
-
-        # gridを探す
-
-        # position_vectorに相当する方向を取る
-        if self.dim == 2:
-            azimuth_recon = self.grid.azimuth
-            # ダミー
-            colatitude_recon = np.zeros_like(azimuth_recon) + np.pi
-        elif self.dim == 3:
-            azimuth_recon = self.grid.azimuth
-            colatitude_recon = self.grid.colatitude
-
-        doas = np.concatenate(
-            (
-                colatitude_recon[:, None],  # colatitude [0, pi]
-                azimuth_recon[:, None],  # azimuth [0, 2 pi]
-            ),
-            axis=-1,
-        )
-        distance = 3.0
-        # source_locations: 3, n_grid_num
-        grid_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-        size = np.einsum("in,in->n", np.conjugate(grid_locations), grid_locations)
-        size = np.sqrt(size)[np.newaxis, ...]
-        grid_locations = grid_locations / np.maximum(size, 1.0e-18)
-
-        # kd treeを使って探索
-        # tree=spatial.KDTree(grid_locations.T)
-        # _,grid_index=tree.query(position_vector)
-        # for n in range(self.grid.n_points):
-        #    spire_cost[n]=spire_cost[n]+np.count_nonzero(grid_index==n)
-
-        grid_index_buf = []
-        for k in self.freq_bins:
-            # print(k)
-            prod = np.einsum("in,ti->tn", grid_locations, position_vector[k, ...])
-            grid_index = np.argmax(prod, axis=-1)
-            grid_index_buf.append(grid_index)
-        grid_index_buf = np.array(grid_index_buf)
-
-        for n in range(self.grid.n_points):
-            spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index_buf == n)
-
-        self.grid.set_values(spire_cost)
-
     def _process(self, X):
         """
         Perform SRP-PHAT for given frame in order to estimate steered response 
@@ -923,7 +367,6 @@ class SPIRE_MM(DOA):
                 sigma,
                 z,
                 x,
-                use_clustering=use_clustering,
                 cluster_index=cluster_index,
                 cluster_center=cluster_center,
                 iter_num2=self.n_bisec_search,
@@ -996,196 +439,6 @@ class SPIRE_MM(DOA):
         spire_cost = np.zeros(self.grid.n_points, dtype=np.int)
         spire_cost[bin_indices] = bin_count
         """
-
-        self.grid.set_values(spire_cost)
-
-    def _process_org(self, X):
-        """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
-        spectrum.
-        """
-
-        ones = np.ones(self.L.shape[1])
-
-        spire_cost = np.zeros(self.grid.n_points)
-
-        # 初期のポジションベクトル
-        n_channels = np.shape(X)[0]
-        n_freq_bins = np.shape(X)[1]
-        n_frames = np.shape(X)[2]
-
-        print(np.shape(X))
-        d = None
-        n_mic_pair = 0
-        for m1 in range(1):
-            # for m1 in range(n_channels):
-            for m2 in range(m1 + 1, n_channels):
-                # print(m1,m2)
-                n_mic_pair = n_mic_pair + 1
-                d_temp = np.array(self.mic_positions[m2]) - np.array(
-                    self.mic_positions[m1]
-                )
-
-                d_temp = d_temp[: self.dim]
-                sigma_temp = np.angle(X[m2, :, :] / X[m1, :, :])
-
-                if d is None:
-                    d = d_temp[np.newaxis, :]
-                    sigma = sigma_temp[np.newaxis, :, :]
-                else:
-                    d = np.concatenate((d, d_temp[np.newaxis, :]), axis=0)
-                    sigma = np.concatenate(
-                        (sigma, sigma_temp[np.newaxis, :, :]), axis=0
-                    )
-        # d: n_mic_pair, dim
-        # sigma: n_mic_pair, freq,time
-
-        print("hogehoge")
-
-        sigma = np.transpose(sigma, (1, 2, 0))
-
-        sigma = np.where(np.abs(sigma) < 1.0e-18, np.zeros_like(sigma) + 1.0e-18, sigma)
-
-        z = np.zeros(shape=(n_freq_bins, n_frames, n_mic_pair), dtype=np.int)
-        x = np.random.normal(size=n_freq_bins * n_frames * n_mic_pair)
-        x = np.reshape(x, newshape=(n_freq_bins, n_frames, n_mic_pair))
-
-        # 時間周波数毎の初期のポジションベクトル
-        position_vector = np.zeros(shape=(n_freq_bins, n_frames, self.dim))
-
-        # for k in sub_freq_bins:
-        for k in self.freq_bins:
-            # print(k)
-            # k=np.array(k,dtype=np.int)
-
-            mode_vec = self.rough_mode_vec[k, :, :]
-            mode_vec = np.conjugate(mode_vec)
-            # print(mode_vec)
-            prod = np.einsum("mi,mt->ti", mode_vec, X[:, k, :])
-            # prod=np.einsum("mi,mt->ti",mode_vec,X[:,k,:])
-            amp = np.abs(prod)
-            # print(k,np.max(amp))
-            index = np.argmax(amp, axis=-1)
-
-            # indexに相当する方向を取る
-            if self.dim == 2:
-                rough_azimuth_recon = self.rough_grid.azimuth[index]
-                # ダミー
-                rough_colatitude_recon = np.zeros_like(rough_azimuth_recon) + np.pi
-            elif self.dim == 3:
-                rough_azimuth_recon = self.rough_grid.azimuth[index]
-                rough_colatitude_recon = self.rough_grid.colatitude[index]
-
-            doas = np.concatenate(
-                (
-                    rough_colatitude_recon[:, None],  # colatitude [0, pi]
-                    rough_azimuth_recon[:, None],  # azimuth [0, 2 pi]
-                ),
-                axis=-1,
-            )
-            distance = 3.0
-
-            # source_locations: 3, n_frames
-            source_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-
-            position_vector[k, :, :] = source_locations[: self.dim, :].T
-
-        size = np.einsum("fti,fti->ft", np.conjugate(position_vector), position_vector)
-        size = np.sqrt(size)[..., np.newaxis]
-        position_vector = position_vector / np.maximum(size, 1.0e-18)
-
-        use_clustering = False
-        cluster_index = np.random.randint(0, self.num_src, size=n_freq_bins * n_frames)
-        cluster_index = np.reshape(cluster_index, (n_freq_bins, n_frames))
-        cluster_center = np.random.normal(size=self.num_src * self.dim)
-        cluster_center = np.reshape(cluster_center, newshape=(self.num_src, self.dim))
-        size = np.einsum("ci,ci->c", np.conjugate(cluster_center), cluster_center)
-        size = np.sqrt(size)[..., np.newaxis]
-        cluster_center = cluster_center / np.maximum(size, 1.0e-18)
-        if use_clustering == True:
-            # pを作る
-            for k in range(fftMax):
-                for l in range(frame_num):
-                    position_vector[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        print("start")
-        d = d[self.freq_bins, ...]
-        est_p = position_vector[self.freq_bins, ...]
-        z = z[self.freq_bins, ...]
-        x = x[self.freq_bins, ...]
-        sigma = sigma[self.freq_bins, ...]
-        freqs = self.freq_hz
-        cluster_index = cluster_index[self.freq_bins, ...]
-
-        for i in range(self.n_mm_itertaions):
-            #
-            (
-                org_cost_0,
-                org_cost_1,
-                org_cost_2,
-                org_cost_3,
-                cost_0,
-                cost_1,
-                cost_2,
-                cost_3,
-                est_p,
-                z,
-                x,
-            ) = doa_estimation_one_iteration(
-                d,
-                est_p,
-                sigma,
-                z,
-                x,
-                freqs,
-                use_clustering=use_clustering,
-                cluster_index=cluster_index,
-                cluster_center=cluster_center,
-                iter_num2=self.n_bisec_search,
-            )
-            # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
-            # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
-            print(cost_0, cost_1, cost_2, cost_3)
-        # est_pから
-        # fti
-        position_vector[self.freq_bins, ...] = est_p
-
-        size = np.einsum("fti,fti->ft", np.conjugate(position_vector), position_vector)
-        size = np.sqrt(size)[..., np.newaxis]
-        position_vector = position_vector / np.maximum(size, 1.0e-18)
-
-        # gridを探す
-
-        # position_vectorに相当する方向を取る
-        if self.dim == 2:
-            azimuth_recon = self.grid.azimuth
-            # ダミー
-            colatitude_recon = np.zeros_like(azimuth_recon) + np.pi
-        elif self.dim == 3:
-            azimuth_recon = self.grid.azimuth
-            colatitude_recon = self.grid.colatitude
-
-        doas = np.concatenate(
-            (
-                colatitude_recon[:, None],  # colatitude [0, pi]
-                azimuth_recon[:, None],  # azimuth [0, 2 pi]
-            ),
-            axis=-1,
-        )
-        distance = 3.0
-        # source_locations: 3, n_grid_num
-        grid_locations = geom.spherical_to_cartesian(doa=doas, distance=distance)
-        size = np.einsum("in,in->n", np.conjugate(grid_locations), grid_locations)
-        size = np.sqrt(size)[np.newaxis, ...]
-        grid_locations = grid_locations / np.maximum(size, 1.0e-18)
-
-        for k in self.freq_bins:
-            print(k)
-            prod = np.einsum("in,ti->tn", grid_locations, position_vector[k, ...])
-            grid_index = np.argmax(prod, axis=-1)
-
-            for n in range(self.grid.n_points):
-                spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index == n)
 
         self.grid.set_values(spire_cost)
 
@@ -1982,7 +1235,6 @@ def doa_estimation_one_iteration(
     sigma,
     z,
     x,
-    use_clustering=False,
     cluster_index=None,
     cluster_center=None,
     iter_num2=100,
@@ -2003,25 +1255,16 @@ def doa_estimation_one_iteration(
     else:
         org_cost_0 = 0
         cost_0 = 0
-    # print("hogehoge")
 
     # 補助変数を更新する
-    # tau=-np.einsum("pd,ftd->ftp",d,p)/SOUND_SPEED
     two_pi_tau = -np.einsum("fpd,ftd->ftp", freqs_d, p) * (2.0 * np.pi / SOUND_SPEED)
 
-    # print(p[10,0,:])
-    # print(p[110,0,:])
     # zをどう決めるか
-    # coef=2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau)+sigma
     coef = two_pi_tau + sigma
-    # print(tau[12:13,...])
-    # print(p[12:13,...])
 
-    right_side = 0.5 - coef / (2.0 * np.pi)
     # zを変更
+    right_side = 0.5 - coef / (2.0 * np.pi)
     z = np.floor(right_side)
-    # print(sigma[12:13,...])
-    # print(2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau))
 
     if silent_mode == False:
         org_cost_1, cost_1 = calc_auxiliary_function_cost(
@@ -2030,13 +1273,9 @@ def doa_estimation_one_iteration(
     else:
         org_cost_1 = 0
         cost_1 = 0
-    # print(cost_0,cost_1)
-
-    # x=2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau)+sigma+2.*np.pi*z
-    x = coef + 2.0 * np.pi * z
-    # print(np.max(x),np.min(x))
 
     # xを変更
+    x = coef + 2.0 * np.pi * z
 
     if silent_mode == False:
         org_cost_2, cost_2 = calc_auxiliary_function_cost(
@@ -2050,10 +1289,6 @@ def doa_estimation_one_iteration(
     sign_x = np.where(np.abs(sign_x) < 0.3, np.ones_like(sign_x), sign_x)
     x_eps = np.maximum(np.abs(x), eps) * sign_x
 
-    # x_eps=np.maximum(np.abs(x),1.e-8)*np.sign(x)
-    # print(np.sign(x))
-    # alpha=np.sin(x_eps)/x_eps
-
     alpha = np.where(np.abs(x) < 1.0e-8, np.ones_like(x), np.sin(x_eps) / x_eps)
 
     # ここから最小解を求める
@@ -2063,85 +1298,15 @@ def doa_estimation_one_iteration(
     r = sigma + 2.0 * np.pi * z
     a = freqs_d * (2.0 * np.pi / SOUND_SPEED)
 
-    # a=2.*np.pi*np.einsum("f,pd->fpd",freqs,d)/SOUND_SPEED
-
     r = np.reshape(r, (freq_num, frame_num, pair_num))
     a = np.reshape(a, (freq_num, pair_num, feature_dim))
     alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))
 
-    if use_clustering == True:
-        # k-meansクラスタリングにより音源方向推定実施する
-        cluster_num = np.shape(cluster_center)[0]
-
-        # cluster_indexを求める
-        alpha2 = np.reshape(alpha, (freq_num, frame_num, pair_num))
-        two_pi_f_cluster_tau = -np.einsum("fpd,cd->fcp", freqs_d, cluster_center) * (
-            2.0 * np.pi / SOUND_SPEED
-        )
-
-        # cluster_tau=-np.einsum("pd,cd->cp",d,cluster_center)/SOUND_SPEED
-        cluster_x = (
-            two_pi_f_cluster_tau[:, np.newaxis, :, :]
-            + sigma[..., np.newaxis, :]
-            + 2.0 * np.pi * z[..., np.newaxis, :]
-        )
-
-        # cluster_x=2.*np.pi*np.einsum("f,cp->fcp",freqs,cluster_tau)[:,np.newaxis,:,:]+sigma[...,np.newaxis,:]+2.*np.pi*z[...,np.newaxis,:]
-        cluster_cost = np.einsum("ftp,ftcp->ftc", alpha2, cluster_x * cluster_x)
-
-        # cluster_index: freq,time
-        cluster_index = np.argmin(cluster_cost, axis=2)
-
-        # pを作る
-        for k in range(freq_num):
-            for l in range(frame_num):
-                p[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        r2 = np.reshape(r, (freq_num, frame_num, pair_num))
-        a2 = np.reshape(a, (freq_num, pair_num, feature_dim))
-
-        for c in range(cluster_num):
-            # cluster_indexがcとなる時間周波数成分を纏めて方向推定する
-            a3 = None  # a3: comp, feature_dim
-            r3 = None  # r3:comp
-            alpha3 = None  # alpha3: comp
-            for k in range(freq_num):
-                for l in range(frame_num):
-                    if cluster_index[k, l] == c:
-                        if a3 is None:
-                            a3 = a2[k, :, :]
-                            r3 = r2[k, l, :]
-                            alpha3 = alpha2[k, l, :]
-                        else:
-                            a3 = np.concatenate((a3, a2[k, :, :]), axis=0)
-                            r3 = np.concatenate((r3, r2[k, l, :]), axis=0)
-                            alpha3 = np.concatenate((alpha3, alpha2[k, l, :]), axis=0)
-            #
-            lamb_temp, p_temp = least_squares_st_norm_one(
-                a3[np.newaxis, ...],
-                r3[np.newaxis, np.newaxis, ...],
-                alpha3[np.newaxis, np.newaxis, ...],
-                iter_num=iter_num2,
-                eps=eps,
-            )
-            # p_temp: 1, feature_dim
-            cluster_center[c, :] = p_temp
-        # pを作る
-        for k in range(freq_num):
-            for l in range(frame_num):
-                p[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        # 音源方向を求める
-        # cluster_center: freq,time,cluster, pair
-
-    else:
-        lamb, p = least_squares_st_norm_one(a, r, alpha, iter_num=iter_num2, eps=eps)
-    # confirm_solutions(a,r,alpha,lamb)
+    lamb, p = least_squares_st_norm_one(a, r, alpha, iter_num=iter_num2, eps=eps)
 
     # lamb: batch
     # lamb=np.reshape(lamb,(freq_num,frame_num))
     p = np.reshape(p, (freq_num, frame_num, feature_dim))
-    # print(p)
     # pを変更
 
     if silent_mode == False:
@@ -2165,8 +1330,6 @@ def doa_estimation_one_iteration(
         x,
     )
 
-    # lamb,p=least_squares_st_norm_one(a,r,alpha,iter_num=iter_num2,eps=eps)
-
 
 # freqs_d: freq,pair,feature
 # d: pair,feature
@@ -2175,9 +1338,6 @@ def doa_estimation_one_iteration(
 # z: freq,frame, pair
 # x: freq,frame,pair
 # freqs: freq
-# use_clustering: K-meansクラスタリングにより音源方向を求めるか
-# cluster_index: freq,frame
-# cluster_center: cluster_num,feature
 
 # SOUND_SPEED: 343
 def coplaner_doa_estimation_one_iteration(
@@ -2186,9 +1346,6 @@ def coplaner_doa_estimation_one_iteration(
     sigma,
     z,
     x,
-    use_clustering=False,
-    cluster_index=None,
-    cluster_center=None,
     iter_num2=100,
     SOUND_SPEED=343.0,
     silent_mode=False,
@@ -2208,25 +1365,17 @@ def coplaner_doa_estimation_one_iteration(
     else:
         org_cost_0 = 0
         cost_0 = 0
-    # print("hogehoge")
 
     # 補助変数を更新する
-    # tau=-np.einsum("pd,ftd->ftp",d,p)/SOUND_SPEED
     two_pi_tau = -np.einsum("fpd,ftd->ftp", freqs_d, p) * (2.0 * np.pi / SOUND_SPEED)
 
-    # print(p[10,0,:])
-    # print(p[110,0,:])
     # zをどう決めるか
     # coef=2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau)+sigma
     coef = two_pi_tau + sigma
-    # print(tau[12:13,...])
-    # print(p[12:13,...])
 
     right_side = 0.5 - coef / (2.0 * np.pi)
     # zを変更
     z = np.floor(right_side)
-    # print(sigma[12:13,...])
-    # print(2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau))
 
     if silent_mode == False:
         org_cost_1, cost_1 = calc_auxiliary_function_cost(
@@ -2237,9 +1386,7 @@ def coplaner_doa_estimation_one_iteration(
         cost_1 = 0
     # print(cost_0,cost_1)
 
-    # x=2.*np.pi*np.einsum("f,ftp->ftp",freqs,tau)+sigma+2.*np.pi*z
     x = coef + 2.0 * np.pi * z
-    # print(np.max(x),np.min(x))
 
     # xを変更
 
@@ -2255,10 +1402,6 @@ def coplaner_doa_estimation_one_iteration(
     sign_x = np.where(np.abs(sign_x) < 0.3, np.ones_like(sign_x), sign_x)
     x_eps = np.maximum(np.abs(x), eps) * sign_x
 
-    # x_eps=np.maximum(np.abs(x),1.e-8)*np.sign(x)
-    # print(np.sign(x))
-    # alpha=np.sin(x_eps)/x_eps
-
     alpha = np.where(np.abs(x) < 1.0e-8, np.ones_like(x), np.sin(x_eps) / x_eps)
 
     # ここから最小解を求める
@@ -2268,93 +1411,17 @@ def coplaner_doa_estimation_one_iteration(
     r = sigma + 2.0 * np.pi * z
     a = freqs_d * (2.0 * np.pi / SOUND_SPEED)
 
-    # a=2.*np.pi*np.einsum("f,pd->fpd",freqs,d)/SOUND_SPEED
-
     r = np.reshape(r, (freq_num, frame_num, pair_num))
     a = np.reshape(a, (freq_num, pair_num, feature_dim))
     alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))
 
-    if use_clustering == True:
-        # k-meansクラスタリングにより音源方向推定実施する
-        cluster_num = np.shape(cluster_center)[0]
-
-        # cluster_indexを求める
-        alpha2 = np.reshape(alpha, (freq_num, frame_num, pair_num))
-        two_pi_f_cluster_tau = -np.einsum("fpd,cd->fcp", freqs_d, cluster_center) * (
-            2.0 * np.pi / SOUND_SPEED
-        )
-
-        # cluster_tau=-np.einsum("pd,cd->cp",d,cluster_center)/SOUND_SPEED
-        cluster_x = (
-            two_pi_f_cluster_tau[:, np.newaxis, :, :]
-            + sigma[..., np.newaxis, :]
-            + 2.0 * np.pi * z[..., np.newaxis, :]
-        )
-
-        # cluster_x=2.*np.pi*np.einsum("f,cp->fcp",freqs,cluster_tau)[:,np.newaxis,:,:]+sigma[...,np.newaxis,:]+2.*np.pi*z[...,np.newaxis,:]
-        cluster_cost = np.einsum("ftp,ftcp->ftc", alpha2, cluster_x * cluster_x)
-
-        # cluster_index: freq,time
-        cluster_index = np.argmin(cluster_cost, axis=2)
-
-        # pを作る
-        for k in range(freq_num):
-            for l in range(frame_num):
-                p[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        r2 = np.reshape(r, (freq_num, frame_num, pair_num))
-        a2 = np.reshape(a, (freq_num, pair_num, feature_dim))
-
-        for c in range(cluster_num):
-            # cluster_indexがcとなる時間周波数成分を纏めて方向推定する
-            a3 = None  # a3: comp, feature_dim
-            r3 = None  # r3:comp
-            alpha3 = None  # alpha3: comp
-            for k in range(freq_num):
-                for l in range(frame_num):
-                    if cluster_index[k, l] == c:
-                        if a3 is None:
-                            a3 = a2[k, :, :]
-                            r3 = r2[k, l, :]
-                            alpha3 = alpha2[k, l, :]
-                        else:
-                            a3 = np.concatenate((a3, a2[k, :, :]), axis=0)
-                            r3 = np.concatenate((r3, r2[k, l, :]), axis=0)
-                            alpha3 = np.concatenate((alpha3, alpha2[k, l, :]), axis=0)
-            #
-            lamb_temp, p_temp, x_non_const_power = coplanar_least_squares_st_norm_one(
-                a3[np.newaxis, ...],
-                r3[np.newaxis, np.newaxis, ...],
-                alpha3[np.newaxis, np.newaxis, ...],
-                zero_feature_index=zero_feature_index,
-                iter_num=iter_num2,
-                eps=eps,
-            )
-            # p_temp: 1, feature_dim
-            cluster_center[c, :] = p_temp
-        # pを作る
-        for k in range(freq_num):
-            for l in range(frame_num):
-                p[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        # 音源方向を求める
-        # cluster_center: freq,time,cluster, pair
-
-    else:
-        lamb, p, x_non_const_power = coplanar_least_squares_st_norm_one(
-            a,
-            r,
-            alpha,
-            zero_feature_index=zero_feature_index,
-            iter_num=iter_num2,
-            eps=eps,
-        )
-    # confirm_solutions(a,r,alpha,lamb)
+    lamb, p, x_non_const_power = coplanar_least_squares_st_norm_one(
+        a, r, alpha, zero_feature_index=zero_feature_index, iter_num=iter_num2, eps=eps,
+    )
 
     # lamb: batch
     # lamb=np.reshape(lamb,(freq_num,frame_num))
     p = np.reshape(p, (freq_num, frame_num, feature_dim))
-    # print(p)
     # pを変更
 
     if silent_mode == False:

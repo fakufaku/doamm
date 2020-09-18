@@ -46,7 +46,7 @@ pra.doa.algorithms["MMUSIC"] = MMUSIC
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(6, 150)  # FFT bins to use for estimation
+freq_bins = np.arange(6, 100)  # FFT bins to use for estimation
 
 # DOA-MM parameters
 
@@ -163,7 +163,7 @@ for rep in range(n_repeat):
             "name": "MMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
-                "s": -1.0,
+                "s": 1.0,
                 "n_iter": 30,
                 "track_cost": False,
                 "verbose": False,
@@ -174,7 +174,7 @@ for rep in range(n_repeat):
             "name": "MMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
-                "s": -1.0,
+                "s": 1.0,
                 "n_iter": 30,
                 "track_cost": False,
                 "verbose": False,
