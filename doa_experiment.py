@@ -26,11 +26,10 @@ import numpy as np
 from scipy.signal import fftconvolve
 
 import pyroomacoustics as pra
-from doamm import DOAMM, Measurement
+from doamm import MMMUSIC, MMSRP, SurrogateType
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from mmusic import MMMUSIC, MMSRP, SurrogateType
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -39,7 +38,6 @@ from utils import arrays, geom, metrics
 # add external modules
 pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
-pra.doa.algorithms["DOAMM"] = DOAMM
 pra.doa.algorithms["MMMUSIC"] = MMMUSIC
 pra.doa.algorithms["MMSRP"] = MMSRP
 

@@ -6,7 +6,7 @@ import scipy.spatial as spatial
 
 import localization.generate_steering_vector as gsv
 import pyroomacoustics.doa as doa
-from mmusic import SurrogateType
+from doamm import SurrogateType
 from pyroomacoustics.doa import *
 from utils import arrays, geom, metrics
 
