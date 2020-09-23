@@ -1,3 +1,4 @@
+import abc
 from enum import Enum
 
 import numpy as np
@@ -8,7 +9,7 @@ from unit_ls import unit_ls
 from utils import geom
 
 
-class MMUSICType(Enum):
+class SurrogateType(Enum):
     Linear = 0
     Quadratic = 1
 
@@ -21,8 +22,10 @@ def power_mean(X, s=1.0, *args, **kwargs):
         return np.mean(X, *args, **kwargs)
 
 
-def mmusic_cost(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
+def cosine_cost(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     """
+    Computes the value of the cost function of DOA-MM.
+
     Parameters
     ----------
     q: array_like, shape (n_dim)
@@ -54,8 +57,11 @@ def mmusic_cost(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     return cost
 
 
-def mmusic_cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
+def cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     """
+    Computes the auxiliary variables of the majorization of the cosine
+    cost function.
+
     Parameters
     ----------
     q: array_like, shape (n_dim)
@@ -78,6 +84,9 @@ def mmusic_cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     """
     n_mics, n_dim = mics.shape
     n_freq, _ = data_mag.shape
+
+    # subtract pi to phase because this is the majorization
+    data_arg = data_arg - np.pi
 
     # prepare the auxiliary variable
     delta_t = mics @ q  # shape (n_mics)
@@ -108,7 +117,7 @@ def mmusic_cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     return data_red, weights_red
 
 
-class MMUSIC(pra.doa.MUSIC):
+class DOAMMBase(pra.doa.MUSIC):
     """
     Implements the MUSCIC DOA algorithm with optimization directly on the array
     manifold using an MM algorithm
@@ -147,8 +156,8 @@ class MMUSIC(pra.doa.MUSIC):
         nfft,
         c=343.0,
         num_src=1,
-        s=-1.0,
-        mm_type=MMUSICType.Quadratic,
+        s=1.0,
+        mm_type=SurrogateType.Quadratic,
         mode="far",
         dim=None,
         n_iter=30,
@@ -190,6 +199,10 @@ class MMUSIC(pra.doa.MUSIC):
         self._L_diff2 = self._L_diff @ self._L_diff.T
         self.ev_max = np.max(np.linalg.eigvals(self._L_diff2))
 
+    @abc.abstractmethod
+    def _process(self, X):
+        raise NotImplementedError
+
     def _extract_off_diagonal(self, X):
         """
         Parameters
@@ -215,7 +228,7 @@ class MMUSIC(pra.doa.MUSIC):
 
     def _cost(self, q, mics, wavenumbers, data_mag, data_arg):
         """ Compute the cost of the function """
-        return mmusic_cost(q, mics, wavenumbers, data_mag, data_arg, s=self.s)
+        return cosine_cost(q, mics, wavenumbers, data_mag, data_arg, s=self.s)
 
     def _optimize_direction(
         self, q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
@@ -249,11 +262,11 @@ class MMUSIC(pra.doa.MUSIC):
             # new_data.shape == ()
             # new_weights.shape == ()
             # the applies the cosine majorization
-            new_data, new_weights = mmusic_cosine_majorization(
-                qs[0], mics, wavenumbers, data_mag, data_arg - np.pi, s=self.s
+            new_data, new_weights = cosine_majorization(
+                qs[0], mics, wavenumbers, data_mag, data_arg, s=self.s
             )
 
-            if self.mm_type == MMUSICType.Quadratic:
+            if self.mm_type == SurrogateType.Quadratic:
                 qs[:] = unit_ls(
                     mics_bc,
                     new_data[None, :],
@@ -261,7 +274,8 @@ class MMUSIC(pra.doa.MUSIC):
                     tol=1e-8,
                     max_iter=1000,
                 )
-            elif self.mm_type == MMUSICType.Linear:
+            elif self.mm_type == SurrogateType.Linear:
+                # second majorization by a linear function
                 C = np.max(new_weights) * self.ev_max
                 y = self._L_diff @ (new_data * new_weights).T
                 Lq = self._L_diff @ (new_weights[:, None] * (self._L_diff.T @ qs.T))
@@ -274,6 +288,93 @@ class MMUSIC(pra.doa.MUSIC):
 
         return qs[0], epoch
 
+    def refine(self, n_iter=None):
+
+        if n_iter is None:
+            n_iter = self.n_iter
+
+        # restore
+        data_mag = self.data_mag
+        data_arg = self.data_arg
+        qs = self.qs
+        mics = self.mics
+        wavenumbers = self.wavenumbers
+
+        # Run the DOA algoritm
+        self.cost = [[] for k in range(self.num_src)]
+
+        for epoch in range(self.n_iter):
+
+            for k, q in enumerate(qs):
+
+                qs[k, :], epochs = self._optimize_direction(
+                    q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
+                )
+
+                if self.verbose:
+                    doa, r = geom.cartesian_to_spherical(qs[k, None, :].T)
+                    print(f"Epoch {epoch} Source {k}")
+                    print(
+                        f"  colatitude={np.degrees(doa[0, :])}\n"
+                        f"  azimuth=   {np.degrees(doa[1, :])}\n"
+                    )
+
+                if self._track_cost:
+                    c = self._cost(qs[k], mics, wavenumbers, data_mag, data_arg)
+                    self.cost[k].append(c)
+                    if self.verbose:
+                        print(f"  cost: {c}")
+
+        # Now we need to convert to azimuth/doa
+        self._set_azim_colat()
+
+    def _set_azim_colat(self):
+        self._doa_recon, _ = geom.cartesian_to_spherical(self.qs.T)
+        self.colatitude_recon = self._doa_recon[0, :]
+        self.azimuth_recon = self._doa_recon[1, :]
+
+        # make azimuth always positive
+        I = self.azimuth_recon < 0.0
+        self.azimuth_recon[I] = 2.0 * np.pi + self.azimuth_recon[I]
+
+    def locate_sources(self, *args, **kwargs):
+        """
+        overload the original to go around the original implementation
+        that was not very flexible
+        """
+        super().locate_sources(*args, **kwargs)
+        self._set_azim_colat()
+
+    def plot(self, mics, wavenumbers, data, En):
+        """
+        Plot the cost function for each cluster
+        """
+
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            import warnings
+
+            warnings.warn("Matplotlib is required for plotting")
+            return
+
+        grid = pra.doa.GridSphere(n_points=1000)
+
+        def func_cost(x, y, z):
+            qs = np.c_[x, y, z]
+            cost = []
+            for q in qs:
+                c = cosine_cost(q, mics, wavenumbers, data, self.s)
+                cost.append(c)
+
+            return np.array(cost)
+
+        grid.apply(func_cost)
+
+        grid.plot(plotly=False)
+
+
+class MMMUSIC(DOAMMBase):
     def _process(self, X):
         """
         Process the input data and computes the DOAs
@@ -313,96 +414,33 @@ class MMUSIC(pra.doa.MUSIC):
 
         # find the peaks for the initial estimate
         self.src_idx = self.grid.find_peaks(k=self.num_src)
-        qs = self.grid.cartesian[:, self.src_idx].T
+        self.qs = self.grid.cartesian[:, self.src_idx].T
 
         # STEP 2: refinement via the MM algorithm
 
         # the wavenumbers (n_freq * n_frames)
-        wavenumbers = 2 * np.pi * self.freq_hz / self.c
+        self.wavenumbers = 2 * np.pi * self.freq_hz / self.c
 
         # For x-corr measurements, we consider differences of microphones as sensors
         # n_mics = n_channels * (n_channels - 1) / 2
         n_mics = self._L_diff.shape[1]
 
         # shape (n_mics, n_dim)
-        mics = self._L_diff.T
+        self.mics = self._L_diff.T
 
         # shape (n_freq, n_mics)
         data = self._extract_off_diagonal(En @ np.conj(En).swapaxes(-2, -1))
-        data_mag = np.abs(data)
-        data_arg = np.angle(data)
+        self.data_mag = np.abs(data)
+        self.data_arg = np.angle(data)
 
-        # Run the DOA algoritm
-        self.cost = [[] for k in range(self.num_src)]
+        # set the azimuth and colatitude according to the content of self.qs
+        self._set_azim_colat()
 
-        for epoch in range(self.n_iter):
-
-            for k, q in enumerate(qs):
-
-                qs[k, :], epochs = self._optimize_direction(
-                    q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
-                )
-
-                if self.verbose:
-                    doa, r = geom.cartesian_to_spherical(qs[k, None, :].T)
-                    print(f"Epoch {epoch} Source {k}")
-                    print(
-                        f"  colatitude={np.degrees(doa[0, :])}\n"
-                        f"  azimuth=   {np.degrees(doa[1, :])}\n"
-                    )
-
-                if self._track_cost:
-                    c = self._cost(qs[k], mics, wavenumbers, data_mag, data_arg)
-                    self.cost[k].append(c)
-                    if self.verbose:
-                        print(f"  cost: {c}")
-
-        # Now we need to convert to azimuth/doa
-        # self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
-        self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
-
-        # self.plot(mics, wavenumbers, data, En)
-
-    def locate_sources(self, *args, **kwargs):
-
-        super().locate_sources(*args, **kwargs)
-        self.colatitude_recon = self._doa_recon[0, :]
-        self.azimuth_recon = self._doa_recon[1, :]
-
-        # make azimuth always positive
-        I = self.azimuth_recon < 0.0
-        self.azimuth_recon[I] = 2.0 * np.pi + self.azimuth_recon[I]
-
-    def plot(self, mics, wavenumbers, data, En):
-        """
-        Plot the cost function for each cluster
-        """
-
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            import warnings
-
-            warnings.warn("Matplotlib is required for plotting")
-            return
-
-        grid = pra.doa.GridSphere(n_points=1000)
-
-        def func_cost(x, y, z):
-            qs = np.c_[x, y, z]
-            cost = []
-            for q in qs:
-                c = mmusic_cost(q, mics, wavenumbers, data, self.s)
-                cost.append(c)
-
-            return np.array(cost)
-
-        grid.apply(func_cost)
-
-        grid.plot(plotly=False)
+        # MM based refinement
+        self.refine()
 
 
-class MMSRP(MMUSIC):
+class MMSRP(DOAMMBase):
     """
     Implements the SRP-PHAT DOA algorithm with optimization directly on the array
     manifold using an MM algorithm
@@ -481,19 +519,19 @@ class MMSRP(MMUSIC):
 
         # find the peaks for the initial estimate
         self.src_idx = self.grid.find_peaks(k=self.num_src)
-        qs = self.grid.cartesian[:, self.src_idx].T
+        self.qs = self.grid.cartesian[:, self.src_idx].T
 
         # STEP 2: refinement via the MM algorithm
 
         # the wavenumbers (n_freq * n_frames)
-        wavenumbers = 2 * np.pi * self.freq_hz / self.c
+        self.wavenumbers = 2 * np.pi * self.freq_hz / self.c
 
         # For x-corr measurements, we consider differences of microphones as sensors
         # n_mics = n_channels * (n_channels - 1) / 2
         n_mics = self._L_diff.shape[1]
 
         # shape (n_mics, n_dim)
-        mics = self._L_diff.T
+        self.mics = self._L_diff.T
 
         # shape (n_freq, n_mics)
         # here the minus sign is to account for the change of maximization
@@ -501,38 +539,15 @@ class MMSRP(MMUSIC):
         data = self._extract_off_diagonal(-C_hat)
 
         # we apply this to reduce the largest eigenvalue to below 1.0
-        l_max = np.max(np.sum(np.abs(C_hat), axis=-1), axis=-1)
-        data /= l_max[:, None]
+        l_max = np.max(np.sum(np.abs(C_hat), axis=-1))
+        data /= l_max
 
         # separate into magnitude and phase
-        data_mag = np.abs(data)
-        data_arg = np.angle(data)
+        self.data_mag = np.abs(data)
+        self.data_arg = np.angle(data)
 
-        # Run the DOA algoritm
-        self.cost = [[] for k in range(self.num_src)]
+        # set the azimuth and colatitude according to the content of self.qs
+        self._set_azim_colat()
 
-        for epoch in range(self.n_iter):
-
-            for k, q in enumerate(qs):
-
-                qs[k, :], epochs = self._optimize_direction(
-                    q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
-                )
-
-                if self.verbose:
-                    doa, r = geom.cartesian_to_spherical(qs[k, None, :].T)
-                    print(f"Epoch {epoch} Source {k}")
-                    print(
-                        f"  colatitude={np.degrees(doa[0, :])}\n"
-                        f"  azimuth=   {np.degrees(doa[1, :])}\n"
-                    )
-
-                if self._track_cost:
-                    c = self._cost(qs[k], mics, wavenumbers, data_mag, data_arg)
-                    self.cost[k].append(c)
-                    if self.verbose:
-                        print(f"  cost: {c}")
-
-        # Now we need to convert to azimuth/doa
-        # self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
-        self._doa_recon, _ = geom.cartesian_to_spherical(qs.T)
+        # MM based refinement
+        self.refine()

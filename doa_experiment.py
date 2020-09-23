@@ -30,7 +30,7 @@ from doamm import DOAMM, Measurement
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from mmusic import MMSRP, MMUSIC, MMUSICType
+from mmusic import MMMUSIC, MMSRP, SurrogateType
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from utils import arrays, geom, metrics
@@ -40,21 +40,21 @@ from utils import arrays, geom, metrics
 pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
 pra.doa.algorithms["DOAMM"] = DOAMM
-pra.doa.algorithms["MMUSIC"] = MMUSIC
+pra.doa.algorithms["MMMUSIC"] = MMMUSIC
 pra.doa.algorithms["MMSRP"] = MMSRP
 
 #######################
 # algorithms parameters
 stft_nfft = 256  # FFT size
 stft_hop = 128  # stft shift
-freq_bins = np.arange(6, 101)  # FFT bins to use for estimation
+freq_bins = np.arange(4, 100)  # FFT bins to use for estimation
 
 # DOA-MM parameters
 
-# algo_names = ["SRP", "MUSIC", "MMUSIC"]
+# algo_names = ["SRP", "MUSIC", "MMMUSIC"]
 # algo_names = ["DOAMM"]
 # algo_names = ["MDSBF"]
-# algo_names = ["MUSIC", "MMUSIC"]
+# algo_names = ["MUSIC", "MMMUSIC"]
 #######################
 
 #########################
@@ -157,30 +157,31 @@ for rep in range(n_repeat):
     n_grid = 1000
     s = 1.0
     mm_iter = 30
+    track_cost = True
 
     algorithms = {
-        "SRP": {"name": "SRP", "kwargs": {"n_grid": n_grid},},
-        "MUSIC": {"name": "MUSIC", "kwargs": {"n_grid": n_grid},},
-        "MMUSIC-Lin": {
-            "name": "MMUSIC",
+        "SRP": {"name": "SRP", "kwargs": {"n_grid": n_grid}},
+        "MUSIC": {"name": "MUSIC", "kwargs": {"n_grid": n_grid}},
+        "MMMUSIC-Lin": {
+            "name": "MMMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
                 "s": s,
                 "n_iter": mm_iter,
-                "track_cost": True,
+                "track_cost": track_cost,
                 "verbose": False,
-                "mm_type": MMUSICType.Linear,
+                "mm_type": SurrogateType.Linear,
             },
         },
-        "MMUSIC-Quad": {
-            "name": "MMUSIC",
+        "MMMUSIC-Quad": {
+            "name": "MMMUSIC",
             "kwargs": {
                 "n_grid": n_grid,
                 "s": s,
                 "n_iter": mm_iter,
-                "track_cost": True,
+                "track_cost": track_cost,
                 "verbose": False,
-                "mm_type": MMUSICType.Quadratic,
+                "mm_type": SurrogateType.Quadratic,
             },
         },
         "MMSRP-Lin": {
@@ -189,9 +190,9 @@ for rep in range(n_repeat):
                 "n_grid": n_grid,
                 "s": s,
                 "n_iter": mm_iter,
-                "track_cost": True,
+                "track_cost": track_cost,
                 "verbose": False,
-                "mm_type": MMUSICType.Linear,
+                "mm_type": SurrogateType.Linear,
             },
         },
         "MMSRP-Quad": {
@@ -200,15 +201,15 @@ for rep in range(n_repeat):
                 "n_grid": n_grid,
                 "s": s,
                 "n_iter": mm_iter,
-                "track_cost": True,
+                "track_cost": track_cost,
                 "verbose": False,
-                "mm_type": MMUSICType.Quadratic,
+                "mm_type": SurrogateType.Quadratic,
             },
         },
     }
 
     """
-    algorithms["SPIRE_MM"] = {
+    algorithms["SPIRE_MM-Quad"] = {
         "name": "SPIRE_MM",
         "kwargs": {
             "n_grid": n_grid,
@@ -221,6 +222,23 @@ for rep in range(n_repeat):
                 for m1 in range(R.shape[1] - 1)
                 for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
             ],
+            "mm_type": SurrogateType.Quadratic,
+        },
+    }
+    algorithms["SPIRE_MM-Lin"] = {
+        "name": "SPIRE_MM",
+        "kwargs": {
+            "n_grid": n_grid,
+            "n_bisec_search": 8,
+            "n_rough_grid": 250,
+            "n_mm_iterations": 10,
+            "mic_positions": R.T,
+            "mic_pairs": [
+                [m1, m2]
+                for m1 in range(R.shape[1] - 1)
+                for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
+            ],
+            "mm_type": SurrogateType.Linear,
         },
     }
     """

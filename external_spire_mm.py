@@ -6,6 +6,7 @@ import scipy.spatial as spatial
 
 import localization.generate_steering_vector as gsv
 import pyroomacoustics.doa as doa
+from mmusic import SurrogateType
 from pyroomacoustics.doa import *
 from utils import arrays, geom, metrics
 
@@ -179,7 +180,8 @@ class SPIRE_MM(DOA):
         r=None,
         azimuth=None,
         colatitude=None,
-        **kwargs
+        mm_type=SurrogateType.Quadratic,
+        **kwargs,
     ):
 
         DOA.__init__(
@@ -193,7 +195,7 @@ class SPIRE_MM(DOA):
             r=r,
             azimuth=azimuth,
             colatitude=colatitude,
-            **kwargs
+            **kwargs,
         )
 
         self.num_pairs = self.M * (self.M - 1) / 2
@@ -210,6 +212,8 @@ class SPIRE_MM(DOA):
 
         # MM法のIteration数
         self.n_mm_itertaions = kwargs["n_mm_iterations"]
+
+        self.mm_type = mm_type
 
         # 二分法のIteration数
         self.n_bisec_search = kwargs["n_bisec_search"]
@@ -266,6 +270,14 @@ class SPIRE_MM(DOA):
             self.mic_positions[mic_pairs[:, 0]]
         )
         # d: n_mic_pair,dim
+
+        # for the linear surrogate function, we need the smallest eigenvalue
+        # of the covariance matrix of the microphone pairs
+        if self.mm_type == SurrogateType.Linear:
+            mic_diff_cov = d.T @ d
+            mic_diff_cov_ev_max = np.linalg.eigvalsh(mic_diff_cov)[-1]
+        else:
+            mic_diff_cov_ev_max = None
 
         # print("hogehoge")
 
@@ -371,11 +383,15 @@ class SPIRE_MM(DOA):
                 cluster_center=cluster_center,
                 iter_num2=self.n_bisec_search,
                 silent_mode=silent_mode,
+                surrogate=self.mm_type,
+                mic_diff_cov_ev_max=mic_diff_cov_ev_max,
+                freqs=freqs,
+                mic_diff=d,
             )
             # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
             # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
             if silent_mode == False:
-                print(cost_0, cost_1, cost_2, cost_3)
+                print("Cost function:", org_cost_0)
         # est_pから
         # fti
         position_vector[self.freq_bins, ...] = est_p
@@ -485,7 +501,7 @@ class SPIRE_MM_CIRCULAR(DOA):
         r=None,
         azimuth=None,
         colatitude=None,
-        **kwargs
+        **kwargs,
     ):
 
         DOA.__init__(
@@ -499,7 +515,7 @@ class SPIRE_MM_CIRCULAR(DOA):
             r=r,
             azimuth=azimuth,
             colatitude=colatitude,
-            **kwargs
+            **kwargs,
         )
 
         self.num_pairs = self.M * (self.M - 1) / 2
@@ -1241,6 +1257,10 @@ def doa_estimation_one_iteration(
     SOUND_SPEED=343.0,
     silent_mode=False,
     eps=1.0e-18,
+    surrogate=SurrogateType.Quadratic,
+    mic_diff_cov_ev_max=None,
+    freqs=None,
+    mic_diff=None,
 ):
     freq_num = np.shape(p)[0]
     frame_num = np.shape(p)[1]
@@ -1285,24 +1305,47 @@ def doa_estimation_one_iteration(
         org_cost_2 = 0
         cost_2 = 0
 
-    sign_x = np.sign(x)
-    sign_x = np.where(np.abs(sign_x) < 0.3, np.ones_like(sign_x), sign_x)
-    x_eps = np.maximum(np.abs(x), eps) * sign_x
-
-    alpha = np.where(np.abs(x) < 1.0e-8, np.ones_like(x), np.sin(x_eps) / x_eps)
+    alpha = np.sinc(x / np.pi)
 
     # ここから最小解を求める
     # r: ftmn
     # a: ftmnd
     # alpha: ftmn
-    r = sigma + 2.0 * np.pi * z
-    a = freqs_d * (2.0 * np.pi / SOUND_SPEED)
+    r = sigma + 2.0 * np.pi * z  # phase
+    a = freqs_d * (2.0 * np.pi / SOUND_SPEED)  # wavenumber / c * mic
 
-    r = np.reshape(r, (freq_num, frame_num, pair_num))
-    a = np.reshape(a, (freq_num, pair_num, feature_dim))
-    alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))
+    r = np.reshape(r, (freq_num, frame_num, pair_num))  # phase
+    a = np.reshape(a, (freq_num, pair_num, feature_dim))  # wavenumber / c * mic_d
+    alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))  # weights
 
-    lamb, p = least_squares_st_norm_one(a, r, alpha, iter_num=iter_num2, eps=eps)
+    if surrogate == SurrogateType.Quadratic:
+        lamb, p = least_squares_st_norm_one(a, r, alpha, iter_num=iter_num2, eps=eps)
+    elif surrogate == SurrogateType.Linear:
+        assert (
+            mic_diff_cov_ev_max is not None
+        ), "The smallest eigenvalue of mic pairs covariance matrix needs to be provided"
+        max_weight = (
+            np.max(alpha, axis=-1)
+            * mic_diff_cov_ev_max
+            * (2 * np.pi * freqs[:, None] / SOUND_SPEED) ** 2
+        )
+
+        # shape (freq_num, frame_num, feature_dim)
+        y = (r * alpha)[:, :, None, :] @ a[:, None, :, :]
+        y = y[..., 0, :]
+
+        # Lp.shape == (freq_num, frame_num, feature_dim)
+        # reminder: p.shape == (freq_num,frame_num,feature_dim)
+        # now compute L * p
+        Lp = a[:, None, :, :].swapaxes(-1, -2) @ (
+            alpha[..., None] * (a[:, None, :, :] @ p[..., None])
+        )
+        Lp = Lp[..., 0]
+
+        p = y - Lp + max_weight[:, :, None] * p
+        p /= np.linalg.norm(p, axis=-1, keepdims=True)
+    else:
+        raise NotImplementedError
 
     # lamb: batch
     # lamb=np.reshape(lamb,(freq_num,frame_num))
