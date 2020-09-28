@@ -5,13 +5,13 @@ import numpy as np
 
 import pyroomacoustics as pra
 from external_mdsbf import MDSBF
+from tools import geom
 from unit_ls import unit_ls
-from utils import geom
 
 
 class SurrogateType(Enum):
-    Linear = 0
-    Quadratic = 1
+    Linear = "Linear"
+    Quadratic = "Quadratic"
 
 
 def power_mean(X, s=1.0, *args, **kwargs):
@@ -22,7 +22,7 @@ def power_mean(X, s=1.0, *args, **kwargs):
         return np.mean(X, *args, **kwargs)
 
 
-def cosine_cost(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
+def cosine_cost(q, mics, wavenumbers, data_mag, data_arg, data_const, s=1.0):
     """
     Computes the value of the cost function of DOA-MM.
 
@@ -50,14 +50,14 @@ def cosine_cost(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     delta_t = mics @ q  # shape (n_mics)
     e = data_arg - wavenumbers[:, None] @ delta_t[None, :]  # shape (n_freq, n_mics)
 
-    ell = n_mics + 2 * np.sum(data_mag * np.cos(e), axis=-1)
+    ell = data_const + 2 * np.sum(data_mag * np.cos(e), axis=-1)
 
     cost = power_mean(ell, s=s)
 
     return cost
 
 
-def cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
+def cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, data_const, s=1.0):
     """
     Computes the auxiliary variables of the majorization of the cosine
     cost function.
@@ -104,7 +104,7 @@ def cosine_majorization(q, mics, wavenumbers, data_mag, data_arg, s=1.0):
     # this the time-frequency bin weight corresponding to the robustifying function
     # shape (n_points)
     if s < 1.0:
-        ell = n_mics + 2 * np.sum(data_mag * np.cos(e), axis=-1)
+        ell = data_const + 2 * np.sum(data_mag * np.cos(e), axis=-1)
         r = (1.0 / n_freq) * ell ** (s - 1.0) / np.mean(ell ** s) ** (1.0 - 1.0 / s)
         weights *= r[:, None]
 
@@ -171,7 +171,10 @@ class DOAMMBase(pra.doa.MUSIC):
         The init method
         """
         self.s = s
-        self.mm_type = mm_type
+        if isinstance(mm_type, SurrogateType):
+            self.mm_type = mm_type
+        else:
+            self.mm_type = SurrogateType(mm_type)
         self.n_iter = n_iter
         self._track_cost = track_cost
         self.verbose = verbose
@@ -226,12 +229,14 @@ class DOAMMBase(pra.doa.MUSIC):
 
         return X.reshape(X.shape[:-2] + (X.shape[-2] * X.shape[-1],))[..., mask]
 
-    def _cost(self, q, mics, wavenumbers, data_mag, data_arg):
+    def _cost(self, q, mics, wavenumbers, data_mag, data_arg, data_const):
         """ Compute the cost of the function """
-        return cosine_cost(q, mics, wavenumbers, data_mag, data_arg, s=self.s)
+        return cosine_cost(
+            q, mics, wavenumbers, data_mag, data_arg, data_const, s=self.s
+        )
 
     def _optimize_direction(
-        self, q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
+        self, q, mics, wavenumbers, data_mag, data_arg, data_const, n_iter=1,
     ):
         """
         Parameters
@@ -263,7 +268,7 @@ class DOAMMBase(pra.doa.MUSIC):
             # new_weights.shape == ()
             # the applies the cosine majorization
             new_data, new_weights = cosine_majorization(
-                qs[0], mics, wavenumbers, data_mag, data_arg, s=self.s
+                qs[0], mics, wavenumbers, data_mag, data_arg, data_const, s=self.s
             )
 
             if self.mm_type == SurrogateType.Quadratic:
@@ -296,6 +301,7 @@ class DOAMMBase(pra.doa.MUSIC):
         # restore
         data_mag = self.data_mag
         data_arg = self.data_arg
+        data_const = self.data_const
         qs = self.qs
         mics = self.mics
         wavenumbers = self.wavenumbers
@@ -308,7 +314,7 @@ class DOAMMBase(pra.doa.MUSIC):
             for k, q in enumerate(qs):
 
                 qs[k, :], epochs = self._optimize_direction(
-                    q, mics, wavenumbers, data_mag, data_arg, n_iter=1,
+                    q, mics, wavenumbers, data_mag, data_arg, data_const, n_iter=1,
                 )
 
                 if self.verbose:
@@ -320,7 +326,9 @@ class DOAMMBase(pra.doa.MUSIC):
                     )
 
                 if self._track_cost:
-                    c = self._cost(qs[k], mics, wavenumbers, data_mag, data_arg)
+                    c = self._cost(
+                        qs[k], mics, wavenumbers, data_mag, data_arg, data_const
+                    )
                     self.cost[k].append(c)
                     if self.verbose:
                         print(f"  cost: {c}")
@@ -396,9 +404,10 @@ class MMMUSIC(DOAMMBase):
 
         # STEP 1: Classic MUSIC
 
-        # compute the covariance matrices
-        self.Pssl = np.zeros((self.num_freq, self.grid.n_points))
-        C_hat = self._compute_correlation_matricesvec(X)
+        # compute the covariance matrices (also needed for STEP 2)
+        # shape (n_freq, n_mic, n_mic)
+        X = X[:, self.freq_bins, :].transpose([1, 0, 2])
+        C_hat = (X @ np.conj(X.swapaxes(-2, -1))) / n_frames
 
         # subspace decomposition (we need these for STEP 2)
         Es, En, ws, wn = self._subspace_decomposition(C_hat)
@@ -416,6 +425,9 @@ class MMMUSIC(DOAMMBase):
         self.src_idx = self.grid.find_peaks(k=self.num_src)
         self.qs = self.grid.cartesian[:, self.src_idx].T
 
+        # set the azimuth and colatitude according to the content of self.qs
+        self._set_azim_colat()
+
         # STEP 2: refinement via the MM algorithm
 
         # the wavenumbers (n_freq * n_frames)
@@ -429,12 +441,13 @@ class MMMUSIC(DOAMMBase):
         self.mics = self._L_diff.T
 
         # shape (n_freq, n_mics)
-        data = self._extract_off_diagonal(En @ np.conj(En).swapaxes(-2, -1))
+        data = (
+            self._extract_off_diagonal(En @ np.conj(En).swapaxes(-2, -1))
+            / self.L.shape[1]
+        )
         self.data_mag = np.abs(data)
         self.data_arg = np.angle(data)
-
-        # set the azimuth and colatitude according to the content of self.qs
-        self._set_azim_colat()
+        self.data_const = En.shape[1]  # dimension of noise subspace
 
         # MM based refinement
         self.refine()
@@ -499,12 +512,15 @@ class MMSRP(DOAMMBase):
         pX = X / absX
 
         # compute the covariance matrices (also needed for STEP 2)
-        self.Pssl = np.zeros((self.num_freq, self.grid.n_points))
         # shape (n_freq, n_mic, n_mic)
-        C_hat = self._compute_correlation_matricesvec(pX)
+        pX = pX[:, self.freq_bins, :].transpose([1, 0, 2])
+        C_hat = (pX @ np.conj(pX.swapaxes(-2, -1))) / n_frames
 
-        # subspace decomposition (we need these for STEP 2)
-        Es, En, ws, wn = self._subspace_decomposition(C_hat)
+        # We transform the covariance matrices to make SRP-PHAT a minimization problem
+        # the offset l_max is added so that the cost function obtained stays larger than zero
+        l_max = np.max(np.sum(np.abs(C_hat), axis=-1), axis=-1)
+        M = self.L.shape[1]
+        C_hat = M * l_max[:, None, None] * np.eye(C_hat.shape[1])[None, :, :] - C_hat
 
         # the mode vectors, shape (n_grid, n_freq, n_mics)
         mod_vec = np.transpose(
@@ -513,13 +529,17 @@ class MMSRP(DOAMMBase):
         # shape (n_freq, n_grid)
         cost_grid = np.mean(
             np.conj(mod_vec[:, :, None, :]) @ C_hat[None, ...] @ mod_vec[..., None],
-            axis=(-1, -2, -3),
+            axis=(-1, -2),
         )
-        self.grid.set_values(cost_grid)
+        # the inverse is taken because the peak finding is looking for local maxima
+        self.grid.set_values(1.0 / power_mean(cost_grid, s=self.s, axis=1))
 
         # find the peaks for the initial estimate
         self.src_idx = self.grid.find_peaks(k=self.num_src)
         self.qs = self.grid.cartesian[:, self.src_idx].T
+
+        # set the azimuth and colatitude according to the content of self.qs
+        self._set_azim_colat()
 
         # STEP 2: refinement via the MM algorithm
 
@@ -536,18 +556,13 @@ class MMSRP(DOAMMBase):
         # shape (n_freq, n_mics)
         # here the minus sign is to account for the change of maximization
         # into minimization
-        data = self._extract_off_diagonal(-C_hat)
-
-        # we apply this to reduce the largest eigenvalue to below 1.0
-        l_max = np.max(np.sum(np.abs(C_hat), axis=-1))
-        data /= l_max
+        data = self._extract_off_diagonal(C_hat)
 
         # separate into magnitude and phase
         self.data_mag = np.abs(data)
         self.data_arg = np.angle(data)
-
-        # set the azimuth and colatitude according to the content of self.qs
-        self._set_azim_colat()
+        # self.data_const = self.L.shape[1] * l_max - np.abs(np.trace(C_hat, axis1=-2, axis2=-1))
+        self.data_const = np.abs(np.trace(C_hat, axis1=-2, axis2=-1))
 
         # MM based refinement
         self.refine()

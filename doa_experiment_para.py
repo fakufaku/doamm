@@ -18,6 +18,11 @@ finding in 2D using one of several algorithms
 - FRIDA
 """
 
+import argparse
+import datetime
+import functools
+import itertools
+import json
 import multiprocessing as multi
 import os
 import pprint
@@ -25,154 +30,80 @@ import random as random
 import threading
 import time as time
 from multiprocessing import Pool
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import yaml
+from joblib import Parallel, delayed
 from scipy.signal import fftconvolve
 
 import pyroomacoustics as pra
+from doamm import MMMUSIC, MMSRP
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from mmusic import MMUSIC
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
-from utils import arrays, geom, metrics
+from tools import arrays, geom, metrics
 
 #######################
 # add external modules
-pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
-pra.doa.algorithms["MMUSIC"] = SPIRE_MM
+pra.doa.algorithms["MMMUSIC"] = MMMUSIC
+pra.doa.algorithms["MMSRP"] = MMSRP
 
 
-#######################
-# algorithms parameters
-stft_nfft = 256  # FFT size
-stft_hop = 128  # stft shift
-freq_bins = np.arange(5, 60)  # FFT bins to use for estimation
+def generate_args(config):
 
-#######################
+    params = config["params"]
+    sweep = config["conditions_sweep"]
 
-#########################
-# Simulation parameters #
-SNR = 0.0  # signal-to-noise ratio
-c = 343.0  # speed of sound
-fs = 16000  # sampling frequency
-room_dim = np.r_[10.0, 10.0, 10.0]  # room dimensions
-SNR = 10
+    np.random.seed(params["seed"])
 
-# available: "pyramic", "amazon_echo"
-mic_array_name = "pyramic"
+    # get the microphone array
+    mic_array_loc = params["mic_array_location"]
+    R = arrays.get_by_name(name=params["mic_array_name"], center=mic_array_loc)
+    R = R[:, :: params["mic_array_downsampling"]]
 
-# number of sources to simulate
-n_sources_list = [1, 2]
+    # compute the parameters for the room simulation
+    e_abs, max_order = pra.inverse_sabine(params["rt60"], params["room_dim"])
+    p_reverb = {"e_abs": e_abs, "max_order": max_order}
 
-# RT60 [(max_order,absorption)]
-# reverb_list=[{"name":"0_35","max_order":17,"absorption":0.35},{"name":"0_70","max_order":34,"absorption":0.2}]
-reverb_list = [{"name": "0_35", "max_order": 17, "absorption": 0.35}]
+    # pick the source locations at random upfront
+    # doa: shape (n_repeat, n_sources, 2)
+    n_sources_max = max(sweep["n_sources"])
 
-eval_list = [
-    (
-        n_sources,
-        reverb,
-        "./doa_result_{}_{}.txt".format(n_sources, reverb["name"]),
-        "./doa_raw_{}_{}.txt".format(n_sources, reverb["name"]),
+    # colatitude [0, pi]
+    # azimuth [0, 2 pi]
+    doas = np.concatenate(
+        (
+            np.pi * np.random.rand(params["repeat"], n_sources_max, 1),
+            2.0 * np.pi * np.random.rand(params["repeat"], n_sources_max, 1),
+        ),
+        axis=-1,
     )
-    for n_sources in n_sources_list
-    for reverb in reverb_list
-]
-# 評価する手法群
 
+    # generate the variable arguments
+    all_args = []
+    for n_sources in sweep["n_sources"]:
+        for snr in sweep["snr"]:
+            for n_grid in sweep["n_grid"]:
+                for rep in range(params["repeat"]):
+                    seed = np.random.randint(2 ** 32 - 1)
+                    all_args.append(
+                        {
+                            "n_sources": n_sources,
+                            "snr": snr,
+                            "n_grid": n_grid,
+                            "doas": doas[rep],
+                            "rep": rep,
+                            "seed": seed,
+                        }
+                    )
 
-# Number of loops in the simulation
-n_repeat = 100
-n_repeat_actual = 10
+    return R, p_reverb, all_args
 
-# random number seed
-seed = 342
-
-# Fix randomness
-np.random.seed(seed)
-random.seed(seed)
-
-
-# we let the sources all be at the same distance
-distance = 3.0  # meters
-
-# get the locations of the microphones
-# we place the microphone a little bit off center to avoid artefacts in the simulation
-mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
-
-# get the microphone array
-R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-
-# mic pairs
-n_channels = np.shape(R)[1]
-mic_pairs_dict = {}
-mic_pairs_dict["pairs_1"] = [
-    [m1, m2]
-    for m1 in range(n_channels - 1)
-    for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, n_channels))
-]
-mic_pairs_dict["pairs_2"] = [
-    [m1, m2]
-    for m1 in range(n_channels - 1)
-    for m2 in range(m1 + 1, np.minimum(m1 + 2 + 1, n_channels))
-]
-mic_pairs_dict["pairs_4"] = [
-    [m1, m2]
-    for m1 in range(n_channels - 1)
-    for m2 in range(m1 + 1, np.minimum(m1 + 4 + 1, n_channels))
-]
-
-# 手法リスト
-# grid_list=[180*90,90*90,90*45,60*30,30*15,18*9,12*6]
-grid_list = [100, 500, 1000]
-algo_meta_info = {}
-
-for grid in grid_list:
-    algo_meta_info["MDSBF_{}".format(grid)] = {
-        "algo_name": "MDSBF",
-        "mic_pairs": mic_pairs_dict["pairs_1"],
-        "n_mm_iterations": 5,
-        "n_bisec_search": 8,
-        "n_rough_grid": 12 * 6,
-        "n_precise_grid": grid,
-        "s": -1,
-    }
-    algo_meta_info["SRP_{}".format(grid)] = {
-        "algo_name": "SRP",
-        "mic_pairs": mic_pairs_dict["pairs_1"],
-        "n_mm_iterations": 5,
-        "n_bisec_search": 8,
-        "n_rough_grid": 12 * 6,
-        "n_precise_grid": grid,
-        "s": -1,
-    }
-    algo_meta_info["MUSIC_{}".format(grid)] = {
-        "algo_name": "MUSIC",
-        "mic_pairs": mic_pairs_dict["pairs_1"],
-        "n_mm_iterations": 5,
-        "n_bisec_search": 8,
-        "n_rough_grid": 12 * 6,
-        "n_precise_grid": grid,
-        "s": -1,
-    }
-    algo_meta_info["MMUSIC_{}".format(grid)] = {
-        "algo_name": "MMUSIC",
-        "mic_pairs": mic_pairs_dict["pairs_1"],
-        "n_mm_iterations": 10,
-        "n_bisec_search": 8,
-        "n_rough_grid": 12 * 6,
-        "n_precise_grid": grid,
-        "s": -1,
-    }
-# 提案法のリスト
-
-
-# rough_grid_list=[18*9,12*6]
-rough_grid_list = [12 * 6]
 
 # rmse: n_sample, n_source
 def eval_func(
@@ -219,301 +150,189 @@ def eval_func(
     # (n_sources,reverb,"./doa_result_{}_{}.txt".format(n_sources,reverb["name"]),"./doa_raw_{}_{}.txt".format(n_sources,reverb["name"]))
 
 
-def doa_experiment(algo_meta_info, eval_cond, R, seed=0):
-    n_sources = eval_cond[0]
-    max_order = eval_cond[1]["max_order"]
-    absorption = eval_cond[1]["absorption"]
-    path_w = eval_cond[2]
-    path_raw = eval_cond[3]
+def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed):
+
+    # reduce number of threads to 1
+    import mkl
+
+    mkl.set_num_threads(1)
 
     # Fix randomness
     np.random.seed(seed)
-    import random as random
-
-    random.seed(seed)
 
     # get the file names
-    files = sampling(n_repeat, n_sources, os.path.join(samples_dir, "metadata.json"))
+    files = sampling(1, n_sources, os.path.join(samples_dir, "metadata.json"))
 
-    # pick the source locations at random upfront
-    # doa: shape (n_repeat, n_sources, 2)
-    doas = np.concatenate(
-        (
-            np.pi * np.random.rand(n_repeat, n_sources, 1),  # colatitude [0, pi]
-            2.0 * np.pi * np.random.rand(n_repeat, n_sources, 1),  # azimuth [0, 2 pi]
-        ),
-        axis=-1,
+    fs = config["params"]["fs"]
+
+    # Create a Room
+    e_abs, max_order = p_reverb["e_abs"], p_reverb["max_order"]
+    room = pra.ShoeBox(
+        config["params"]["room_dim"],
+        fs=fs,
+        max_order=max_order,
+        materials=pra.Material(e_abs),
     )
 
-    error_dict = {}
-    elapsed_time_dict = {}
-    wave_time_list = []
+    # We use a circular array with radius 15 cm # and 12 microphones
+    room.add_microphone_array(R)
 
-    for meta_info_name in algo_meta_info:
-        error_dict[meta_info_name] = []
-        elapsed_time_dict[meta_info_name] = []
+    # read source signals
+    signals = wav_read_center(files[0], center=True, seed=0)
 
-    for rep in range(n_repeat_actual):
+    # _params source locations
+    source_locations = geom.spherical_to_cartesian(
+        doa=doas,
+        distance=config["params"]["source_distance"],
+        ref=np.array(config["params"]["mic_array_location"]),
+    )
 
-        # Create an anechoic room
-        room = pra.ShoeBox(room_dim, fs=fs, max_order=max_order, absorption=absorption)
+    # add the source
+    for k in range(n_sources):
+        signals[k] /= np.std(signals[k])
+        room.add_source(source_locations[:, k], signal=signals[k])
 
-        # We use a circular array with radius 15 cm # and 12 microphones
-        room.add_microphone_array(pra.MicrophoneArray(R, fs=room.fs))
+    # run the simulation
+    room.simulate(snr=snr)
 
-        # read source signals
-        signals = wav_read_center(files[rep], center=True, seed=0)
+    rt60 = pra.experimental.measure_rt60(room.rir[0][0], fs=fs)
+    wave_length = np.float(np.shape(room.mic_array.signals)[-1]) / np.float(fs)
 
-        # source locations
-        source_locations = geom.spherical_to_cartesian(
-            doa=doas[rep], distance=distance, ref=mic_array_loc
+    ################################
+    # Compute the STFT frames needed
+    # shape (n_frames, n_freq, n_channels)
+    p_stft = config["params"]["stft"]
+    X = pra.transform.analysis(room.mic_array.signals.T, p_stft["nfft"], p_stft["hop"])
+
+    # the DOA localizer takes a different ordering of dimensions
+    X = X.transpose([2, 1, 0])  # (n_channels, n_freq, n_frames)
+
+    # The frequency range to use
+    freq_bins_bnd = [int(f / fs * p_stft["nfft"]) for f in config["params"]["freq_hz"]]
+    freq_bins = np.arange(*freq_bins_bnd)
+
+    pairs = [[m1, m2] for m1 in range(R.shape[1]) for m2 in range(m1 + 1, R.shape[1])]
+
+    # Now generate all the algorithms to evaluate
+    algorithms = {}
+    for name, p in config["algorithms"].items():
+
+        if p["name"] == "SPIRE_MM":
+            p["kwargs"]["mic_positions"] = R.T
+            p["kwargs"]["mic_pairs"] = pairs
+            algorithms[name] = p
+
+        elif p["name"] in config["mm_algos"]:
+
+            sweep = config["algo_sweep"]
+
+            prod = itertools.product(
+                *[sweep[val] for val in ["mm_types", "s"] if val in sweep]
+            )
+            for t in prod:
+                p["kwargs"]["mm_type"] = t[0]
+                new_name = f"{name}_{t[0]}"
+
+                if "s" in sweep:
+                    p["kwargs"]["s"] = t[1]
+                    new_name += f"_s{t[1]:.1f}"
+
+                algorithms[new_name] = p
+
+    ##############################################
+    # Now we can test all the algorithms available
+
+    results = []
+    result_tmp = {
+        "name": "",
+        "rmse": [],
+        "runtime": 0.0,
+        "rt60": float(rt60),
+        "sample_length": float(wave_length),
+        "n_sources": n_sources,
+        "snr": snr,
+        "n_grid": n_grid,
+        "rep": rep,
+        "seed": seed,
+    }
+
+    def make_new_result(name, rmse, runtime):
+        new_res = result_tmp.copy()
+        new_res["name"] = name
+        new_res["rmse"] = rmse.tolist()
+        new_res["runtime"] = runtime
+        return new_res
+
+    for name, p in algorithms.items():
+
+        # Construct the new DOA object
+        # the max_four parameter is necessary for FRIDA only
+        c = pra.constants.get("c")
+        doa = pra.doa.algorithms[p["name"]](
+            R, fs, p_stft["nfft"], dim=3, c=c, n_grid=n_grid, **p["kwargs"]
         )
 
-        # print(source_locations[:,0]-mic_array_loc)
-        # print(source_locations[:,1]-mic_array_loc)
-        # print(R[:,0])
-        # for s in range(2):
-        #    for m in range(40,42):
-        #        dist=np.sqrt(np.sum(np.square(R[:,m]-source_locations[:,s])))
-        #        print(s,m,dist)
+        # this call here perform localization on the frames in X
+        start = time.perf_counter()
+        doa.locate_sources(X, num_src=n_sources, freq_bins=freq_bins)
+        elapsed_time = time.perf_counter() - start
 
-        # add the source
-        for k in range(n_sources):
-            signals[k] /= np.std(signals[k])
-            room.add_source(source_locations[:, k], signal=signals[k])
+        estimate = np.c_[doa.colatitude_recon, doa.azimuth_recon]
+        rmse, perm = metrics.doa_eval(doas, estimate)
 
-        # run the simulation
-        room.simulate(snr=SNR)
+        if p["name"] not in config["mm_algos"]:
+            results.append(make_new_result(name, rmse, elapsed_time))
+        else:
+            new_name = name + f"_it0"
+            results.append(make_new_result(new_name, rmse, elapsed_time))
 
-        rt60 = pra.experimental.measure_rt60(room.rir[0][0], fs=fs)
-        print("rt60:{} [sec]".format(rt60))
+            spent_iter = 0
+            for mm_iter in config["algo_sweep"]["mm_iter"]:
+                # run MM for a few more iterations
+                start = time.perf_counter()
+                doa.refine(n_iter=mm_iter - spent_iter)
+                elapsed_time = elapsed_time + time.perf_counter() - start
 
-        wave_length = np.float(np.shape(room.mic_array.signals)[-1]) / np.float(fs)
-        print("wave: {} [sec]".format(wave_length))
-        wave_time_list.append(wave_length)
+                spent_iter = mm_iter
 
-        ################################
-        # Compute the STFT frames needed
-        # shape (n_frames, n_freq, n_channels)
-        X = pra.transform.analysis(room.mic_array.signals.T, stft_nfft, stft_hop)
-        # print(np.shape(room.mic_array.signals))
-        # print(np.shape(X))
-        # the DOA localizer takes a different ordering of dimensions
-        X = X.transpose([2, 1, 0])
+                estimate = np.c_[doa.colatitude_recon, doa.azimuth_recon]
+                rmse, perm = metrics.doa_eval(doas, estimate)
 
-        ##############################################
-        # Now we can test all the algorithms available
+                new_name = name + f"_it{mm_iter}"
+                results.append(make_new_result(new_name, rmse, elapsed_time))
 
-        for meta_info_name in algo_meta_info:
-            meta_info = algo_meta_info[meta_info_name]
-            algo_name = meta_info["algo_name"]
-            print(meta_info)
-
-            start = time.time()
-
-            # Construct the new DOA object
-            # the max_four parameter is necessary for FRIDA only
-            doa = pra.doa.algorithms[algo_name](
-                R,
-                fs,
-                stft_nfft,
-                dim=3,
-                c=c,
-                s=meta_info["s"],
-                n_grid=meta_info["n_precise_grid"],
-                mic_positions=R.T,
-                n_mm_iterations=meta_info["n_mm_iterations"],
-                n_bisec_search=meta_info["n_bisec_search"],
-                n_rough_grid=meta_info["n_rough_grid"],
-                mic_pairs=meta_info["mic_pairs"],
-            )
-
-            # this call here perform localization on the frames in X
-            doa.locate_sources(X, num_src=n_sources, freq_bins=freq_bins)
-
-            estimate = np.c_[doa.colatitude_recon, doa.azimuth_recon]
-
-            rmse, perm = metrics.doa_eval(doas[rep], estimate)
-
-            elapsed_time = time.time() - start
-            print(f"Algorithm: {meta_info_name}")
-            print("Co est:", np.degrees(doa.colatitude_recon[perm]))
-            print("Co  gt:", np.degrees(doas[rep][:, 0]))
-            print("Az est:", np.degrees(doa.azimuth_recon[perm]))
-            print("Az  gt:", np.degrees(doas[rep][:, 1]))
-
-            rmse_num = np.shape(rmse)[-1]
-            if rmse_num != n_sources:
-
-                # 平均値を足しとく
-                mean = np.mean(rmse)
-                for s in range(n_sources - rmse_num):
-                    rmse = np.concatenate((rmse, mean[None]), axis=-1)
-
-            print(f"{meta_info_name} Error:", np.degrees(rmse))
-            print(f"{meta_info_name} Total:", np.degrees(np.mean(rmse)))
-            print(f"{meta_info_name} elapsed_time [sec]:", elapsed_time)
-
-            error_dict[meta_info_name].append(rmse)
-            elapsed_time_dict[meta_info_name].append(elapsed_time)
-            print()
-
-        for meta_info_name in algo_meta_info:
-            error_rmse = error_dict[meta_info_name]
-            elapsed_time = elapsed_time_dict[meta_info_name]
-            wave_time = np.average(np.array(wave_time_list))
-            elapsed_time = np.average(elapsed_time)
-
-            rmse = np.array(error_rmse)
-
-            print(meta_info_name)
-            print(error_rmse)
-
-            print(np.shape(rmse))
-            out_dict = eval_func(rmse, False)
-            # print("{},{},{},{}".format(meta_info_name,rep,out_dict["mean"],out_dict["median"]))
-            print(f"{meta_info_name} {rep} {wave_time} {elapsed_time} [sec]")
-            pprint.pprint(out_dict)
-            # out_dict={"mean":eval_mean,"median":eval_median,"eval_percentile":eval_percentile,"eval_accuracy":eval_accuracy}
-
-            # print(f"{meta_info_name} {rep} Partial Result:", np.degrees(np.mean(rmse)), np.degrees(np.median(rmse)), np.degrees(np.std(rmse)))
-
-        f = open(path_raw + "{}.txt".format(rep), mode="w")
-        for meta_info_name in algo_meta_info:
-            error_rmse = error_dict[meta_info_name]
-            elapsed_time = elapsed_time_dict[meta_info_name]
-            wave_time = np.average(np.array(wave_time_list))
-            elapsed_time = np.average(elapsed_time)
-            rmse = np.array(error_rmse)
-            f.write(
-                "{} wave {} [sec] elapsed {} [sec]\n".format(
-                    meta_info_name, wave_time, elapsed_time
-                )
-            )
-            # f.write(algo_meta_info[meta_info_name])
-            f.write("\n")
-            f.write("{}\n".format(np.degrees(rmse)))
-
-        f.close()
-
-        f = open(path_w + "{}.txt".format(rep), mode="w")
-        percentiles = [5, 10, 25, 50, 75, 90, 95]
-        admit_errors = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0]
-
-        f.write("algo_name,mean,median,std,")
-        for percent in percentiles:
-            f.write("percentile_{} [degree],".format(percent))
-        for admit_error in admit_errors:
-            f.write("accuracy_{} [0-1],".format(admit_error))
-        f.write("\n")
-
-        for meta_info_name in algo_meta_info:
-            error_rmse = error_dict[meta_info_name]
-            rmse = np.array(error_rmse)
-            print(f"{meta_info_name} Whole Result:", np.degrees(np.median(rmse)))
-            # out_dict={"mean":eval_mean,"median":eval_median,"eval_percentile":eval_percentile,"eval_accuracy":eval_accuracy}
-
-            out_dict = eval_func(
-                rmse, False, percentiles=percentiles, admit_errors=admit_errors
-            )
-            f.write(
-                "{},{},{},{},".format(
-                    meta_info_name,
-                    out_dict["mean"],
-                    out_dict["median"],
-                    out_dict["std"],
-                )
-            )
-            for i in range(np.size(percentiles)):
-                f.write("{},".format(out_dict["eval_percentile"][i]))
-            for i in range(np.size(admit_errors)):
-                f.write("{},".format(out_dict["eval_accuracy"][i]))
-            f.write("\n")
-            # f.write("{},Whole Result,{},{},{}:\n".format(meta_info_name,np.degrees(np.mean(rmse)), np.degrees(np.median(rmse)),np.degrees(np.std(rmse))))
-
-        f.close()
-
-    f = open(path_raw, mode="w")
-    for meta_info_name in algo_meta_info:
-        error_rmse = error_dict[meta_info_name]
-        elapsed_time = elapsed_time_dict[meta_info_name]
-        wave_time = np.average(np.array(wave_time_list))
-        elapsed_time = np.average(elapsed_time)
-        rmse = np.array(error_rmse)
-        f.write(
-            "{} wave {} [sec] elapsed {} [sec]\n".format(
-                meta_info_name, wave_time, elapsed_time
-            )
-        )
-        # f.write(algo_meta_info[meta_info_name])
-        f.write("\n")
-        f.write("{}\n".format(np.degrees(rmse)))
-
-    f.close()
-
-    f = open(path_w, mode="w")
-    percentiles = [5, 10, 25, 50, 75, 90, 95]
-    admit_errors = [0.5, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 20.0]
-
-    f.write("algo_name,mean,median,std,")
-    for percent in percentiles:
-        f.write("percentile_{} [degree],".format(percent))
-    for admit_error in admit_errors:
-        f.write("accuracy_{} [0-1],".format(admit_error))
-    f.write("\n")
-
-    for meta_info_name in algo_meta_info:
-        error_rmse = error_dict[meta_info_name]
-        rmse = np.array(error_rmse)
-        print(f"{meta_info_name} Whole Result:", np.degrees(np.median(rmse)))
-        # out_dict={"mean":eval_mean,"median":eval_median,"eval_percentile":eval_percentile,"eval_accuracy":eval_accuracy}
-
-        out_dict = eval_func(
-            rmse, False, percentiles=percentiles, admit_errors=admit_errors
-        )
-        f.write(
-            "{},{},{},{},".format(
-                meta_info_name, out_dict["mean"], out_dict["median"], out_dict["std"]
-            )
-        )
-        for i in range(np.size(percentiles)):
-            f.write("{},".format(out_dict["eval_percentile"][i]))
-        for i in range(np.size(admit_errors)):
-            f.write("{},".format(out_dict["eval_accuracy"][i]))
-        f.write("\n")
-        # f.write("{},Whole Result,{},{},{}:\n".format(meta_info_name,np.degrees(np.mean(rmse)), np.degrees(np.median(rmse)),np.degrees(np.std(rmse))))
-
-    f.close()
+    return results
 
 
-# 実行シングル実行
+def main_run(args):
 
-for eval_cond in eval_list:
-    doa_experiment(algo_meta_info, eval_cond, R, seed=342)
+    # open the configuration
+    with open(args.config, "r") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
 
+    R, p_reverb, all_args = generate_args(config)
 
-def process3(arg):
-    temp_eval_list = arg[0]
-    for eval_cond in temp_eval_list:
-        doa_experiment(algo_meta_info, eval_cond, R, seed=342)
+    run_doa = functools.partial(doa_experiment, config=config, R=R, p_reverb=p_reverb)
 
+    # Now run this in parallel with joblib
+    results = Parallel()(delayed(run_doa)(**kwargs) for kwargs in all_args)
 
-print(multi.cpu_count())
+    os.makedirs(args.output, exist_ok=True)
+    date = datetime.datetime.now().isoformat(timespec="seconds")
+    outputfile = args.output / f"{date}_{config['name']}.yml"
 
-all_len = len(eval_list)
-Nprocess = 1
-Nlen = all_len // Nprocess
-args = []
-jobs = []
-for index in range(0, all_len, Nlen):
-    nstart = index
-    nend = index + Nlen
-    temp_eval_list = eval_list[nstart:nend]
-    p = multi.Process(target=process3, args=([temp_eval_list],))
-    jobs.append(p)
-    p.start()
-    print("index{}:".format(index))
+    with open(outputfile, "w") as f:
+        # json.dump(results, f)
+        yaml.dump(results, f)
 
 
-for p in jobs:
-    p.join()
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser(description="DOA experiments")
+    parser.add_argument("config", type=Path, help="Path to configuration file")
+    parser.add_argument(
+        "--output", type=Path, default="sim_results", help="Path to configuration file"
+    )
+    args = parser.parse_args()
+
+    main_run(args)

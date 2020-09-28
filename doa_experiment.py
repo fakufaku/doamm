@@ -32,11 +32,10 @@ from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
 from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
-from utils import arrays, geom, metrics
+from tools import arrays, geom, metrics
 
 #######################
 # add external modules
-pra.doa.algorithms["MDSBF"] = MDSBF
 pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
 pra.doa.algorithms["MMMUSIC"] = MMMUSIC
 pra.doa.algorithms["MMSRP"] = MMSRP
@@ -106,7 +105,19 @@ mic_array_loc = room_dim / 2 + np.random.randn(3) * 0.1  # a little off center
 
 # get the microphone array
 R = arrays.get_by_name(name=mic_array_name, center=mic_array_loc)
-R = R[:, ::4]
+R = R[:, ::8]
+
+# Grid size for all DOA algorithms
+n_grid = 500
+
+# DOA-MM options
+s = 1.0
+mm_iter = 5
+track_cost = False
+
+# SPIRE-MM options
+use_kd_tree = True
+spire_mm_iter = 10
 
 for rep in range(n_repeat):
 
@@ -151,11 +162,6 @@ for rep in range(n_repeat):
 
     ##############################################
     # Now we can test all the algorithms available
-
-    n_grid = 1000
-    s = 1.0
-    mm_iter = 30
-    track_cost = True
 
     algorithms = {
         "SRP": {"name": "SRP", "kwargs": {"n_grid": n_grid}},
@@ -206,14 +212,13 @@ for rep in range(n_repeat):
         },
     }
 
-    """
     algorithms["SPIRE_MM-Quad"] = {
         "name": "SPIRE_MM",
         "kwargs": {
             "n_grid": n_grid,
-            "n_bisec_search": 8,
+            "rooting_n_iter": 5,
             "n_rough_grid": 250,
-            "n_mm_iterations": 10,
+            "n_mm_iterations": spire_mm_iter,
             "mic_positions": R.T,
             "mic_pairs": [
                 [m1, m2]
@@ -221,15 +226,17 @@ for rep in range(n_repeat):
                 for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
             ],
             "mm_type": SurrogateType.Quadratic,
+            "use_kd_tree": use_kd_tree,
         },
     }
+
     algorithms["SPIRE_MM-Lin"] = {
         "name": "SPIRE_MM",
         "kwargs": {
             "n_grid": n_grid,
-            "n_bisec_search": 8,
+            "rooting_n_iter": 5,
             "n_rough_grid": 250,
-            "n_mm_iterations": 10,
+            "n_mm_iterations": spire_mm_iter,
             "mic_positions": R.T,
             "mic_pairs": [
                 [m1, m2]
@@ -237,14 +244,15 @@ for rep in range(n_repeat):
                 for m2 in range(m1 + 1, np.minimum(m1 + 1 + 1, R.shape[1]))
             ],
             "mm_type": SurrogateType.Linear,
+            "use_kd_tree": use_kd_tree,
         },
     }
-    """
 
     for variant_name, p in algorithms.items():
         # Construct the new DOA object
         # the max_four parameter is necessary for FRIDA only
         doa = pra.doa.algorithms[p["name"]](R, fs, stft_nfft, dim=3, c=c, **p["kwargs"])
+        print(X.shape)
 
         # this call here perform localization on the frames in X
         t1 = time.perf_counter()

@@ -1,0 +1,52 @@
+---
+name: experiment1_effect_grid_size
+params:
+  seed: 924893619
+  repeat: 1
+  stft:
+    nfft: 256
+    hop: 128
+  freq_hz: [300, 6500]
+  c: 343.0
+  fs: 16000
+  room_dim: [10.0, 10.0, 10.0]
+  source_distance: 3.0
+  mic_array_name: pyramic
+  mic_array_location: [5.091, 4.953, 5.013]
+  mic_array_downsampling: 4
+  rt60: 0.5
+
+conditions_sweep:
+  n_sources: [2]
+  snr: [10]
+  n_grid: [500, 1000, 5000, 10000]
+
+algo_sweep:
+  mm_iter: [1, 2, 3, 4, 5, 10, 20, 30]
+  mm_types: [Linear, Quadratic]
+
+mm_algos:
+- MMMUSIC
+- MMSRP
+
+algorithms:
+  MMMUSIC:
+    name: MMMUSIC
+    kwargs:
+      s: -1.0
+  MMSRP:
+    name: MMSRP
+    kwargs:
+      s: 1.0
+  SPIRE_MM_Lin:
+    name: SPIRE_MM
+    kwargs:
+      n_rough_grid: 250
+      n_mm_iterations: 10
+      mm_type: Linear
+  SPIRE_MM_Quad:
+    name: SPIRE_MM
+    kwargs:
+      n_rough_grid: 250
+      n_mm_iterations: 10
+      mm_type: Quadratic

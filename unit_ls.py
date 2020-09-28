@@ -53,12 +53,15 @@ def root_secular(w, b, n_iter=10, tol=None):
         x[I] = 0.5 * (x[I] + lower_bound[I])
         x[nI] = new_x[nI]
 
-        if np.max(np.abs(f)) < tol:
+        max_tol = np.max(np.abs(f))
+
+        if max_tol < tol:
             break
 
     return (
         w_max * x,  # rescale before returning
         epoch,  # number of iterations for info
+        max_tol,  # the final tolerance achieved
     )
 
 
@@ -137,7 +140,9 @@ def unit_ls(A, b, weights=None, tol=1e-8, max_iter=1000):
     b_tilde = matvec(T(V), ATb)  # shape (n_dim,)
 
     # find the largest zero of the secular equation
-    lambda_, ellapsed_epochs = root_secular(w, b_tilde, n_iter=max_iter, tol=tol)
+    lambda_, ellapsed_epochs, max_tol = root_secular(
+        w, b_tilde, n_iter=max_iter, tol=tol
+    )
 
     if ellapsed_epochs == max_iter:
         import warnings

@@ -8,7 +8,8 @@ import localization.generate_steering_vector as gsv
 import pyroomacoustics.doa as doa
 from doamm import SurrogateType
 from pyroomacoustics.doa import *
-from utils import arrays, geom, metrics
+from tools import arrays, geom, metrics
+from unit_ls import unit_ls
 
 
 class ModeVector2(object):
@@ -181,6 +182,8 @@ class SPIRE_MM(DOA):
         azimuth=None,
         colatitude=None,
         mm_type=SurrogateType.Quadratic,
+        rooting_n_iter=8,
+        use_kd_tree=True,
         **kwargs,
     ):
 
@@ -213,10 +216,19 @@ class SPIRE_MM(DOA):
         # MM法のIteration数
         self.n_mm_itertaions = kwargs["n_mm_iterations"]
 
-        self.mm_type = mm_type
+        if isinstance(mm_type, SurrogateType):
+            self.mm_type = mm_type
+        else:
+            self.mm_type = SurrogateType(mm_type)
 
         # 二分法のIteration数
-        self.n_bisec_search = kwargs["n_bisec_search"]
+        self.rooting_n_iter = rooting_n_iter
+
+        self.use_kd_tree = use_kd_tree
+        if self.use_kd_tree:
+            self.tree = spatial.cKDTree(self.grid.cartesian.T)
+        else:
+            self.tree = None
 
     def _make_rough_mode_vectors(self, n_rough_grid=None):
         # Use a default grid size
@@ -248,8 +260,6 @@ class SPIRE_MM(DOA):
         # 周波数毎に実施する
         ones = np.ones(self.L.shape[1])
 
-        spire_cost = np.zeros(self.grid.n_points)
-
         # 初期のポジションベクトル
         n_channels = np.shape(X)[0]
         n_freq_bins = np.shape(X)[1]
@@ -279,8 +289,6 @@ class SPIRE_MM(DOA):
         else:
             mic_diff_cov_ev_max = None
 
-        # print("hogehoge")
-
         # 時間周波数毎の初期のポジションベクトル
         position_vector = np.zeros(shape=(n_freq_bins, n_frames, self.dim))
 
@@ -296,11 +304,13 @@ class SPIRE_MM(DOA):
         # 初期化
         mode_vec = self.rough_mode_vec[self.freq_bins, :, :]
         mode_vec = np.conjugate(mode_vec)
-        # print(mode_vec)
-        prod = np.einsum("fmi,mft->fti", mode_vec, X[:, self.freq_bins, :])
-        # prod=np.einsum("mi,mt->ti",mode_vec,X[:,k,:])
+
+        # Evaluation of the cost function on rough grid
+        XX = X[:, self.freq_bins, :].transpose([1, 2, 0])  # (freq, time, chan)
+        mv = mode_vec.transpose([0, 2, 1])  # (freq, grid, chan)
+        prod = (mv[:, None, :, :] @ XX[:, :, :, None])[..., 0]
+
         amp = np.abs(prod)
-        # print(k,np.max(amp))
         # ft
         index = np.argmax(amp, axis=-1)
         org_shape = np.shape(index)
@@ -350,7 +360,6 @@ class SPIRE_MM(DOA):
                 for l in range(n_frames):
                     position_vector[k, l, :] = cluster_center[cluster_index[k, l], :]
 
-        # print("start")
         est_p = position_vector[self.freq_bins, ...]
         z = z[self.freq_bins, ...]
         x = x[self.freq_bins, ...]
@@ -381,15 +390,13 @@ class SPIRE_MM(DOA):
                 x,
                 cluster_index=cluster_index,
                 cluster_center=cluster_center,
-                iter_num2=self.n_bisec_search,
+                iter_num2=self.rooting_n_iter,
                 silent_mode=silent_mode,
                 surrogate=self.mm_type,
                 mic_diff_cov_ev_max=mic_diff_cov_ev_max,
                 freqs=freqs,
                 mic_diff=d,
             )
-            # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
-            # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
             if silent_mode == False:
                 print("Cost function:", org_cost_0)
         # est_pから
@@ -425,36 +432,28 @@ class SPIRE_MM(DOA):
         size = np.sqrt(size)[np.newaxis, ...]
         grid_locations = grid_locations / np.maximum(size, 1.0e-18)
 
-        # kd treeを使って探索
-        # print("start KD tree")
-        # tree=spatial.KDTree(grid_locations.T)
-        # print("end KD tree")
+        if not self.use_kd_tree:
+            grid_index_buf = []
+            for k in self.freq_bins:
+                prod = np.einsum("in,ti->tn", grid_locations, position_vector[k, ...])
+                grid_index = np.argmax(prod, axis=-1)
+                grid_index_buf.append(grid_index)
+            grid_index_buf = np.array(grid_index_buf)
 
-        # position_vector=np.reshape(position_vector,[-1,np.shape(position_vector)[2]])
-        # _,grid_index=tree.query(position_vector)
-        # print("end query")
-        # for n in range(self.grid.n_points):
-        #    spire_cost[n]=spire_cost[n]+np.count_nonzero(grid_index==n)
+            spire_cost = np.zeros(self.grid.n_points)
+            for n in range(self.grid.n_points):
+                spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index_buf == n)
 
-        grid_index_buf = []
-        for k in self.freq_bins:
-            # print(k)
-            prod = np.einsum("in,ti->tn", grid_locations, position_vector[k, ...])
-            grid_index = np.argmax(prod, axis=-1)
-            grid_index_buf.append(grid_index)
-        grid_index_buf = np.array(grid_index_buf)
+        else:
 
-        for n in range(self.grid.n_points):
-            spire_cost[n] = spire_cost[n] + np.count_nonzero(grid_index_buf == n)
+            # Same code, but with a kd-tree (Robin version)
+            dim = position_vector.shape[-1]
+            pv = position_vector[self.freq_bins, ...].reshape((-1, dim))
+            _, nn = self.tree.query(pv)
+            bin_indices, bin_count = np.unique(nn, return_counts=True)
 
-        """
-        # Same code, but with a kd-tree (Robin version)
-        tree = spatial.cKDTree(self.grid.cartesian.T)
-        _, nn = tree.query(position_vector.reshape((-1, position_vector.shape[-1])))
-        bin_indices, bin_count = np.unique(nn, return_counts=True)
-        spire_cost = np.zeros(self.grid.n_points, dtype=np.int)
-        spire_cost[bin_indices] = bin_count
-        """
+            spire_cost = np.zeros(self.grid.n_points, dtype=np.float)
+            spire_cost[bin_indices] = bin_count
 
         self.grid.set_values(spire_cost)
 
@@ -537,7 +536,7 @@ class SPIRE_MM_CIRCULAR(DOA):
         self.n_mm_itertaions = kwargs["n_mm_iterations"]
 
         # 二分法のIteration数
-        self.n_bisec_search = kwargs["n_bisec_search"]
+        self.rooting_n_iter = kwargs["rooting_n_iter"]
 
     def _make_rough_mode_vectors(self, n_rough_grid=None):
         # Use a default grid size
@@ -592,8 +591,6 @@ class SPIRE_MM_CIRCULAR(DOA):
         )
         # d: n_mic_pair,dim
 
-        # print("hogehoge")
-
         # 時間周波数毎の初期のポジションベクトル
         position_vector = np.zeros(shape=(n_freq_bins, n_frames, self.dim))
 
@@ -609,11 +606,9 @@ class SPIRE_MM_CIRCULAR(DOA):
         # 初期化
         mode_vec = self.rough_mode_vec[self.freq_bins, :, :]
         mode_vec = np.conjugate(mode_vec)
-        # print(mode_vec)
         prod = np.einsum("fmi,mft->fti", mode_vec, X[:, self.freq_bins, :])
         # prod=np.einsum("mi,mt->ti",mode_vec,X[:,k,:])
         amp = np.abs(prod)
-        # print(k,np.max(amp))
         # ft
         index = np.argmax(amp, axis=-1)
         org_shape = np.shape(index)
@@ -649,21 +644,6 @@ class SPIRE_MM_CIRCULAR(DOA):
         size = np.sqrt(size)[..., np.newaxis]
         position_vector = position_vector / np.maximum(size, 1.0e-18)
 
-        use_clustering = False
-        cluster_index = np.random.randint(0, self.num_src, size=n_freq_bins * n_frames)
-        cluster_index = np.reshape(cluster_index, (n_freq_bins, n_frames))
-        cluster_center = np.random.normal(size=self.num_src * self.dim)
-        cluster_center = np.reshape(cluster_center, newshape=(self.num_src, self.dim))
-        size = np.einsum("ci,ci->c", np.conjugate(cluster_center), cluster_center)
-        size = np.sqrt(size)[..., np.newaxis]
-        cluster_center = cluster_center / np.maximum(size, 1.0e-18)
-        if use_clustering == True:
-            # pを作る
-            for k in self.freq_bins:
-                for l in range(n_frames):
-                    position_vector[k, l, :] = cluster_center[cluster_index[k, l], :]
-
-        # print("start")
         est_p = position_vector[self.freq_bins, ...]
         z = z[self.freq_bins, ...]
         x = x[self.freq_bins, ...]
@@ -675,8 +655,6 @@ class SPIRE_MM_CIRCULAR(DOA):
         x_non_const_power_vector = np.zeros(shape=(n_freq_bins, n_frames))
 
         for i in range(self.n_mm_itertaions):
-            #
-            # org_cost_0,org_cost_1,org_cost_2,org_cost_3,cost_0,cost_1,cost_2,cost_3,est_p,z,x= doa_estimation_one_iteration(freqs_d,est_p,sigma,z,x,use_clustering=use_clustering,cluster_index=cluster_index,cluster_center=cluster_center,iter_num2=self.n_bisec_search,silent_mode=silent_mode)
             (
                 org_cost_0,
                 org_cost_1,
@@ -699,13 +677,11 @@ class SPIRE_MM_CIRCULAR(DOA):
                 use_clustering=use_clustering,
                 cluster_index=cluster_index,
                 cluster_center=cluster_center,
-                iter_num2=self.n_bisec_search,
+                iter_num2=self.rooting_n_iter,
                 silent_mode=silent_mode,
                 zero_feature_index=2,
             )
 
-            # print(cost_1-cost_0,cost_2-cost_1,cost_3-cost_2)
-            # print(org_cost_0,org_cost_3,org_cost_3-org_cost_0)
             if silent_mode == False:
                 print(cost_0, cost_1, cost_2, cost_3)
 
@@ -744,27 +720,14 @@ class SPIRE_MM_CIRCULAR(DOA):
         size = np.sqrt(size)[np.newaxis, ...]
         grid_locations = grid_locations / np.maximum(size, 1.0e-18)
 
-        # kd treeを使って探索
-        # tree=spatial.KDTree(grid_locations.T)
-        # _,grid_index=tree.query(position_vector)
-        # for n in range(self.grid.n_points):
-        #    spire_cost[n]=spire_cost[n]+np.count_nonzero(grid_index==n)
-
         grid_index_buf = []
 
         # 制約なし解のパワーが1を大幅に超えて居たらReject
         print(np.average(x_non_const_power_vector))
         valid_index = x_non_const_power_vector < self.reject_th
         for k in self.freq_bins:
-            # print(k)
-            # frame
-            # valid_index[k,:]
-
             prod = np.einsum("in,ti->tn", grid_locations, position_vector[k, ...])
             grid_index = np.argmax(prod, axis=-1)
-
-            # print(np.shape(grid_index))
-            # print(np.shape(valid_index))
 
             grid_index = grid_index[valid_index[k, :]]
 
@@ -827,22 +790,8 @@ def coplanar_least_squares_st_norm_one(
         )
         return value
 
-    # print(cost(left_side))
-    # print("hogehoge")
-    # print(cost(right_side))
     for i in range(iter_num):
-        # print("size")
-        # size=np.einsum("bi,bi->b",np.conjugate(temp_x),temp_x)
-        # print(size-1.0)
-        # print("confirm")
-        # confirm_solutions(a,r,alpha,left_side)
-        # print(cost(left_side))
-        # print("hogehgoe")
 
-        # confirm_solutions(a,r,right_side)
-        # print(cost(right_side))
-        # print("hogehoge2")
-        # print("--i {}".format(i))
         mid = (left_side + right_side) / 2.0
         val = cost(mid)
         new_left_side = np.where(val > 0, mid, left_side)
@@ -850,27 +799,14 @@ def coplanar_least_squares_st_norm_one(
         left_side = new_left_side
         right_side = new_right_side
 
-        # print(cost(left_side)[10])
-        # print(cost(right_side)[10])
-        # print(np.shape(left_side))
-        # print("hogehoge")
-        # print(cost(right_side))
     lamb = left_side
-    # print(lamb)
-    # print(np.shape(lamb))
     inv_lamb_W = 1.0 / np.maximum(lamb[..., np.newaxis] + np.real(W), eps)
 
     x_const = make_x(V, inv_lamb_W, p)
     x_non_const_power = np.einsum("fti,fti->ft", x_non_const, np.conjugate(x_non_const))
     x_non_const_power = np.real(np.zeros_like(x_const)) + x_non_const_power[..., None]
-    # print(np.shape(x_non_const_power))
-    # print(np.shape(lamb))
-    # for k in range(np.shape(x_non_const_power)[0]):
-    #    print(np.concatenate((x_non_const_power[...,0],lamb),axis=-1)[k,...])
-    # exit(0)
     x_result = np.where(x_non_const_power < 1, x_non_const, x_const)
     x_power = np.einsum("fti,fti->ft", x_result, np.conjugate(x_result))
-    # print(x_power[x_power>1])
 
     y_result = np.sqrt(np.maximum(1.0 - x_power, eps))
 
@@ -971,22 +907,7 @@ def least_squares_st_norm_one(a, r, alpha, iter_num=10, eps=1.0e-18):
         )
         return value
 
-    # print(cost(left_side))
-    # print("hogehoge")
-    # print(cost(right_side))
     for i in range(iter_num):
-        # print("size")
-        # size=np.einsum("bi,bi->b",np.conjugate(temp_x),temp_x)
-        # print(size-1.0)
-        # print("confirm")
-        # confirm_solutions(a,r,alpha,left_side)
-        # print(cost(left_side))
-        # print("hogehgoe")
-
-        # confirm_solutions(a,r,right_side)
-        # print(cost(right_side))
-        # print("hogehoge2")
-        # print("--i {}".format(i))
         mid = (left_side + right_side) / 2.0
         val = cost(mid)
         new_left_side = np.where(val > 0, mid, left_side)
@@ -994,17 +915,11 @@ def least_squares_st_norm_one(a, r, alpha, iter_num=10, eps=1.0e-18):
         left_side = new_left_side
         right_side = new_right_side
 
-        # print(cost(left_side)[10])
-        # print(cost(right_side)[10])
-        # print(np.shape(left_side))
-        # print("hogehoge")
-        # print(cost(right_side))
     lamb = left_side
     inv_lamb_W = 1.0 / np.maximum(lamb[..., np.newaxis] + np.real(W), eps)
 
     temp_x = make_x(V, inv_lamb_W, p)
     return (lamb, temp_x)
-    # cov2=np.einsum("...ki,...i,...hi->...kh",V,W,np.conjugate(V))
 
 
 # 補助関数の値
@@ -1073,7 +988,6 @@ def linear_doa_estimation_one_iteration(
 
     # 補助関数とかは一切変化しない
 
-    # print(x[400,0,:])
     if silent_mode == False:
         org_cost_0, cost_0 = calc_auxiliary_function_cost(
             freqs_d, p, sigma, z, x, SOUND_SPEED, eps
@@ -1206,7 +1120,6 @@ def linear_doa_estimation_one_iteration(
     # lamb: batch
     # lamb=np.reshape(lamb,(freq_num,frame_num))
     p = np.reshape(p, (freq_num, frame_num, feature_dim))
-    # print(p)
     # pを変更
 
     if silent_mode == False:
@@ -1267,7 +1180,6 @@ def doa_estimation_one_iteration(
     pair_num = np.shape(freqs_d)[1]
     feature_dim = np.shape(freqs_d)[2]
 
-    # print(x[400,0,:])
     if silent_mode == False:
         org_cost_0, cost_0 = calc_auxiliary_function_cost(
             freqs_d, p, sigma, z, x, SOUND_SPEED, eps
@@ -1277,7 +1189,8 @@ def doa_estimation_one_iteration(
         cost_0 = 0
 
     # 補助変数を更新する
-    two_pi_tau = -np.einsum("fpd,ftd->ftp", freqs_d, p) * (2.0 * np.pi / SOUND_SPEED)
+    ps = (2.0 * np.pi / SOUND_SPEED) * p
+    two_pi_tau = -(freqs_d[:, None, :, :] @ ps[..., None])[..., 0]
 
     # zをどう決めるか
     coef = two_pi_tau + sigma
@@ -1319,7 +1232,10 @@ def doa_estimation_one_iteration(
     alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))  # weights
 
     if surrogate == SurrogateType.Quadratic:
-        lamb, p = least_squares_st_norm_one(a, r, alpha, iter_num=iter_num2, eps=eps)
+        A = np.broadcast_to(
+            a[:, None, :, :], (freq_num, frame_num, pair_num, feature_dim)
+        )
+        p = unit_ls(A, r, alpha, max_iter=iter_num2)
     elif surrogate == SurrogateType.Linear:
         assert (
             mic_diff_cov_ev_max is not None
@@ -1400,7 +1316,6 @@ def coplaner_doa_estimation_one_iteration(
     pair_num = np.shape(freqs_d)[1]
     feature_dim = np.shape(freqs_d)[2]
 
-    # print(x[400,0,:])
     if silent_mode == False:
         org_cost_0, cost_0 = calc_auxiliary_function_cost(
             freqs_d, p, sigma, z, x, SOUND_SPEED, eps
@@ -1427,7 +1342,6 @@ def coplaner_doa_estimation_one_iteration(
     else:
         org_cost_1 = 0
         cost_1 = 0
-    # print(cost_0,cost_1)
 
     x = coef + 2.0 * np.pi * z
 
