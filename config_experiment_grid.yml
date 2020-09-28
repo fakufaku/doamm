@@ -18,7 +18,7 @@ params:
 
 conditions_sweep:
   n_sources: [1, 2]
-  snr: [10]
+  snr: [-10.0, -5.0, 0.0, 5.0, 10.0]
   n_grid: [100, 500, 1000, 5000, 10000]
 
 algo_sweep:
