@@ -34,16 +34,16 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyroomacoustics as pra
 import yaml
 from joblib import Parallel, delayed
+from pyroomacoustics.doa import circ_dist
 from scipy.signal import fftconvolve
 
-import pyroomacoustics as pra
 from doamm import MMMUSIC, MMSRP
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from tools import arrays, geom, metrics
 
@@ -84,6 +84,11 @@ def generate_args(config):
         axis=-1,
     )
 
+    # we also choose all the source samples upfront
+    files = sampling(
+        params["repeat"], n_sources_max, os.path.join(samples_dir, "metadata.json")
+    )
+
     # generate the variable arguments
     all_args = []
     for n_sources in sweep["n_sources"]:
@@ -97,6 +102,7 @@ def generate_args(config):
                             "snr": snr,
                             "n_grid": n_grid,
                             "doas": doas[rep],
+                            "files": files[rep],
                             "rep": rep,
                             "seed": seed,
                         }
@@ -150,7 +156,7 @@ def eval_func(
     # (n_sources,reverb,"./doa_result_{}_{}.txt".format(n_sources,reverb["name"]),"./doa_raw_{}_{}.txt".format(n_sources,reverb["name"]))
 
 
-def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed):
+def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, files, rep, seed):
 
     # reduce number of threads to 1
     import mkl
@@ -159,9 +165,6 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed)
 
     # Fix randomness
     np.random.seed(seed)
-
-    # get the file names
-    files = sampling(1, n_sources, os.path.join(samples_dir, "metadata.json"))
 
     fs = config["params"]["fs"]
 
@@ -178,7 +181,7 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed)
     room.add_microphone_array(R)
 
     # read source signals
-    signals = wav_read_center(files[0], center=True, seed=0)
+    signals = wav_read_center(files[:n_sources], center=True, seed=0)
 
     # _params source locations
     source_locations = geom.spherical_to_cartesian(
@@ -212,6 +215,14 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed)
     freq_bins = np.arange(*freq_bins_bnd)
 
     pairs = [[m1, m2] for m1 in range(R.shape[1]) for m2 in range(m1 + 1, R.shape[1])]
+
+    doa_algorithms = {
+        "SRP": pra.doa.SRP,
+        "MUSIC": pra.doa.MUSIC,
+        "SPIRE_MM": SPIRE_MM,
+        "MMMUSIC": MMMUSIC,
+        "MMSRP": MMSRP,
+    }
 
     # Now generate all the algorithms to evaluate
     algorithms = {}
@@ -268,7 +279,7 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, rep, seed)
         # Construct the new DOA object
         # the max_four parameter is necessary for FRIDA only
         c = pra.constants.get("c")
-        doa = pra.doa.algorithms[p["name"]](
+        doa = doa_algorithms[p["name"]](
             R, fs, p_stft["nfft"], dim=3, c=c, n_grid=n_grid, **p["kwargs"]
         )
 
@@ -315,10 +326,12 @@ def main_run(args):
     run_doa = functools.partial(doa_experiment, config=config, R=R, p_reverb=p_reverb)
 
     # Now run this in parallel with joblib
-    results = Parallel()(delayed(run_doa)(**kwargs) for kwargs in all_args)
+    results = Parallel(n_jobs=-1, verbose=10)(
+        delayed(run_doa)(**kwargs) for kwargs in all_args
+    )
 
     os.makedirs(args.output, exist_ok=True)
-    date = datetime.datetime.now().isoformat(timespec="seconds")
+    date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     outputfile = args.output / f"{date}_{config['name']}.yml"
 
     with open(outputfile, "w") as f:

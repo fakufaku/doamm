@@ -1,9 +1,11 @@
-name: doa_mm
+name: doamm
 dependencies:
   - python
   - numpy
   - scipy
+  - joblib
   - matplotlib
+  - PyYAML
   - pip
   - pip:
     - pyroomacoustics
