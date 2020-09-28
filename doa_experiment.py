@@ -23,14 +23,14 @@ import time
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyroomacoustics as pra
+from pyroomacoustics.doa import circ_dist
 from scipy.signal import fftconvolve
 
-import pyroomacoustics as pra
-from doamm import MMMUSIC, MMSRP, SurrogateType
+from doamm import MMMUSIC, MMSRP, DOAMMBase, SurrogateType
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from tools import arrays, geom, metrics
 
@@ -112,7 +112,7 @@ n_grid = 500
 
 # DOA-MM options
 s = 1.0
-mm_iter = 5
+mm_iter = 0
 track_cost = False
 
 # SPIRE-MM options
@@ -258,6 +258,19 @@ for rep in range(n_repeat):
         t1 = time.perf_counter()
         doa.locate_sources(X, num_src=n_sources, freq_bins=freq_bins)
         t2 = time.perf_counter()
+
+        if isinstance(doa, DOAMMBase):
+            print(
+                "before:",
+                np.degrees(doa.colatitude_recon),
+                np.degrees(doa.azimuth_recon),
+            )
+            doa.refine(n_iter=20)
+            print(
+                "after:",
+                np.degrees(doa.colatitude_recon),
+                np.degrees(doa.azimuth_recon),
+            )
 
         # wrap azimuth in positive orthant
         I = doa.azimuth_recon < 0.0

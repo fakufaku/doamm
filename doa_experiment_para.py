@@ -237,6 +237,9 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, files, rep
 
             sweep = config["algo_sweep"]
 
+            # we always start by zero iterations
+            p["kwargs"]["n_iter"] = 0
+
             prod = itertools.product(
                 *[sweep[val] for val in ["mm_types", "s"] if val in sweep]
             )
@@ -294,7 +297,7 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, files, rep
         if p["name"] not in config["mm_algos"]:
             results.append(make_new_result(name, rmse, elapsed_time))
         else:
-            new_name = name + f"_it0"
+            new_name = name + "_it0"
             results.append(make_new_result(new_name, rmse, elapsed_time))
 
             spent_iter = 0
@@ -325,10 +328,13 @@ def main_run(args):
 
     run_doa = functools.partial(doa_experiment, config=config, R=R, p_reverb=p_reverb)
 
-    # Now run this in parallel with joblib
-    results = Parallel(n_jobs=-1, verbose=10)(
-        delayed(run_doa)(**kwargs) for kwargs in all_args
-    )
+    if args.test:
+        results = run_doa(**all_args[0])
+    else:
+        # Now run this in parallel with joblib
+        results = Parallel(n_jobs=-1, verbose=10)(
+            delayed(run_doa)(**kwargs) for kwargs in all_args
+        )
 
     os.makedirs(args.output, exist_ok=True)
     date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -345,6 +351,9 @@ if __name__ == "__main__":
     parser.add_argument("config", type=Path, help="Path to configuration file")
     parser.add_argument(
         "--output", type=Path, default="sim_results", help="Path to configuration file"
+    )
+    parser.add_argument(
+        "--test", action="store_true", help="Run in test mode (single loop)"
     )
     args = parser.parse_args()
 

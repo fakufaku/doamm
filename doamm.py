@@ -2,8 +2,8 @@ import abc
 from enum import Enum
 
 import numpy as np
-
 import pyroomacoustics as pra
+
 from external_mdsbf import MDSBF
 from tools import geom
 from unit_ls import unit_ls
@@ -309,7 +309,7 @@ class DOAMMBase(pra.doa.MUSIC):
         # Run the DOA algoritm
         self.cost = [[] for k in range(self.num_src)]
 
-        for epoch in range(self.n_iter):
+        for epoch in range(n_iter):
 
             for k, q in enumerate(qs):
 
