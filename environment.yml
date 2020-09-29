@@ -1,6 +1,7 @@
 name: doamm
 dependencies:
   - python
+  - ipython
   - numpy
   - scipy
   - joblib
@@ -9,3 +10,4 @@ dependencies:
   - pip
   - pip:
     - pyroomacoustics
+    - seaborn

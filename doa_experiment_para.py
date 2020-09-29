@@ -19,6 +19,7 @@ finding in 2D using one of several algorithms
 """
 
 import argparse
+import copy
 import datetime
 import functools
 import itertools
@@ -34,16 +35,16 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pyroomacoustics as pra
 import yaml
 from joblib import Parallel, delayed
-from pyroomacoustics.doa import circ_dist
 from scipy.signal import fftconvolve
 
+import pyroomacoustics as pra
 from doamm import MMMUSIC, MMSRP
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
+from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from tools import arrays, geom, metrics
 
@@ -244,14 +245,16 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, files, rep
                 *[sweep[val] for val in ["mm_types", "s"] if val in sweep]
             )
             for t in prod:
-                p["kwargs"]["mm_type"] = t[0]
+                new_p = copy.deepcopy(p)
+
+                new_p["kwargs"]["mm_type"] = t[0]
                 new_name = f"{name}_{t[0]}"
 
                 if "s" in sweep:
-                    p["kwargs"]["s"] = t[1]
+                    new_p["kwargs"]["s"] = t[1]
                     new_name += f"_s{t[1]:.1f}"
 
-                algorithms[new_name] = p
+                algorithms[new_name] = new_p
 
     ##############################################
     # Now we can test all the algorithms available
