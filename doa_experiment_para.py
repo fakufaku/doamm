@@ -35,24 +35,18 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pyroomacoustics as pra
 import yaml
 from joblib import Parallel, delayed
+from pyroomacoustics.doa import circ_dist
 from scipy.signal import fftconvolve
 
-import pyroomacoustics as pra
 from doamm import MMMUSIC, MMSRP
 from external_mdsbf import MDSBF
 from external_spire_mm import SPIRE_MM
 from get_data import samples_dir
-from pyroomacoustics.doa import circ_dist
 from samples.generate_samples import sampling, wav_read_center
 from tools import arrays, geom, metrics
-
-#######################
-# add external modules
-pra.doa.algorithms["SPIRE_MM"] = SPIRE_MM
-pra.doa.algorithms["MMMUSIC"] = MMMUSIC
-pra.doa.algorithms["MMSRP"] = MMSRP
 
 
 def generate_args(config):
@@ -230,9 +224,10 @@ def doa_experiment(config, R, p_reverb, n_sources, snr, n_grid, doas, files, rep
     for name, p in config["algorithms"].items():
 
         if p["name"] == "SPIRE_MM":
-            p["kwargs"]["mic_positions"] = R.T
-            p["kwargs"]["mic_pairs"] = pairs
-            algorithms[name] = p
+            new_p = copy.deepcopy(p)
+            new_p["kwargs"]["mic_positions"] = R.T
+            new_p["kwargs"]["mic_pairs"] = pairs
+            algorithms[name] = new_p
 
         elif p["name"] in config["mm_algos"]:
 
@@ -339,13 +334,18 @@ def main_run(args):
             delayed(run_doa)(**kwargs) for kwargs in all_args
         )
 
-    os.makedirs(args.output, exist_ok=True)
     date = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
-    outputfile = args.output / f"{date}_{config['name']}.yml"
+    output_dir = args.output / f"{date}_{config['name']}"
+    os.makedirs(output_dir, exist_ok=True)
 
-    with open(outputfile, "w") as f:
-        # json.dump(results, f)
+    # save the results
+    with open(output_dir / "results.yml", "w") as f:
         yaml.dump(results, f)
+
+    # save together with the config file used
+    with open(output_dir / "config.yml", "w") as f:
+        # json.dump(results, f)
+        yaml.dump(config, f)
 
 
 if __name__ == "__main__":
