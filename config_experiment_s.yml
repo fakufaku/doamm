@@ -18,13 +18,13 @@ params:
 
 conditions_sweep:
   n_sources: [1, 2, 3]
-  snr: [10]
-  n_grid: [1000, 5000]
+  snr: [0, 10]
+  n_grid: [100, 1000]
 
 algo_sweep:
   mm_iter: [10, 30]
-  mm_types: [Linear, Quadratic]
-  s: [1.0, 0.5, -1.0, -3.0, -10.0]
+  mm_types: [Quadratic]
+  s: [1.0, 0.75, 0.5, 0.25, -0.5, -1.0, -3.0, -10.0]
 
 mm_algos:
 - MMMUSIC
@@ -37,27 +37,3 @@ algorithms:
   MMSRP:
     name: MMSRP
     kwargs: {}
-  SPIRE_MM_Lin_5it:
-    name: SPIRE_MM
-    kwargs:
-      n_rough_grid: 250
-      n_mm_iterations: 5
-      mm_type: Linear
-  SPIRE_MM_Lin_7it:
-    name: SPIRE_MM
-    kwargs:
-      n_rough_grid: 250
-      n_mm_iterations: 7
-      mm_type: Linear
-  SPIRE_MM_Lin_10it:
-    name: SPIRE_MM
-    kwargs:
-      n_rough_grid: 250
-      n_mm_iterations: 10
-      mm_type: Linear
-  SPIRE_MM_Quad_5it:
-    name: SPIRE_MM
-    kwargs:
-      n_rough_grid: 250
-      n_mm_iterations: 5
-      mm_type: Quadratic

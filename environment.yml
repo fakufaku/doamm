@@ -2,6 +2,8 @@ name: doamm
 dependencies:
   - python
   - ipython
+  - pandas
+  - seaborn
   - numpy
   - scipy
   - joblib

@@ -339,8 +339,8 @@ def main_run(args):
     os.makedirs(output_dir, exist_ok=True)
 
     # save the results
-    with open(output_dir / "results.yml", "w") as f:
-        yaml.dump(results, f)
+    with open(output_dir / "results.json", "w") as f:
+        json.dump(results, f)
 
     # save together with the config file used
     with open(output_dir / "config.yml", "w") as f:
