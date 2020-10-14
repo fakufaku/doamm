@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -19,6 +20,13 @@ if __name__ == "__main__":
         help="Read the aggregated data table from a pickle cache",
     )
     parser.add_argument(
+        "-o",
+        "--out",
+        type=Path,
+        default="figures",
+        help="Output directory for the figures",
+    )
+    parser.add_argument(
         "files",
         type=Path,
         nargs="+",
@@ -27,16 +35,24 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    df = load_results(args.files, pickle=args.pickle)
+    os.makedirs(args.out, exist_ok=True)
 
-    g = sns.catplot(
-        data=df,
-        col="Sources",
-        row="Grid Size",
-        hue="Algorithm",
-        x="SNR",
-        y="RMSE [deg]",
-        kind="box",
-    )
+    df, config = load_results(args.files, pickle=args.pickle)
+
+    for metric in ["RMSE [deg]", "Runtime [s]"]:
+        g = sns.catplot(
+            data=df,
+            col="Grid Size",
+            row="Sources",
+            hue="Algorithm",
+            x="SNR",
+            y=metric,
+            kind="box",
+            fliersize=1,
+        )
+
+        met = metric.split()[0]
+
+        plt.savefig(args.out / f"figure_2_s_metric{met}.pdf")
 
     plt.show()

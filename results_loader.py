@@ -21,6 +21,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -28,38 +29,15 @@ import numpy as np
 import pandas as pd
 import yaml
 
-# This table maps some of the labels we used in the
-# simulation to labels we would like to use in the figures
-# of the paper
-substitutions = {
-    "Algorithm": {
-        "five_laplace": "FIVE",
-        "overiva_ip_laplace": "OverIVA-IP",
-        "overiva_ip2_laplace": "OverIVA-IP2",
-        "overiva_ip_block_laplace": "OverIVA-IP-NP",
-        "overiva_ip2_block_laplace": "OverIVA-IP2-NP",
-        "overiva_demix_bg_laplace": "OverIVA-DX/BG",
-        "ogive_laplace": "OGIVEs",
-        "auxiva_laplace": "AuxIVA-IP (PCA)",
-        "auxiva_laplace_nopca": "AuxIVA-IP",
-        "auxiva_iss_laplace": "AuxIVA-ISS (PCA)",
-        "auxiva_iss_laplace_nopca": "AuxIVA-ISS",
-        "auxiva2_laplace": "AuxIVA-IP2 (PCA)",
-        "auxiva2_laplace_nopca": "AuxIVA-IP2",
-        "auxiva_pca": "PCA+AuxIVA-IP",
-        "auxiva_demix_steer_nopca": "AuxIVA-IPA",
-        "auxiva_demix_steer_pca": "AuxIVA-IPA (PCA)",
-        "overiva_demix_steer": "OverIVA-IPA",
-        "pca": "PCA",
-    }
-}
 
-
-def load_results(data_files, pickle=False):
+def load_results(dirs, pickle=False):
 
     # check if a pickle file exists for these files
-    picklefile_name = data_files[0].stem
+    picklefile_name = dirs[0].stem
     pickle_file = f".{picklefile_name}.pickle"
+
+    with open(dirs[0] / "config.yml", "r") as f:
+        config = yaml.load(f, Loader=yaml.FullLoader)
 
     if os.path.isfile(pickle_file) and pickle:
         print("Reading existing pickle file...")
@@ -70,24 +48,28 @@ def load_results(data_files, pickle=False):
 
         # reading all data files in the directory
         records = []
-        for file in data_files:
-            with open(file, "r") as f:
-                content = yaml.load(f, Loader=yaml.FullLoader)
+        for i, dir in enumerate(dirs):
+            with open(dir / "results.json", "r") as f:
+                content = json.load(f)
                 for seg in content:
                     records += seg
 
         # build the data table line by line
         print("Building table")
         columns = [
+            "Algorithm",
+            "Name",
             "Sources",
             "SNR",
             "Grid Size",
-            "Algorithm",
             "seed",
             "rep",
             "rt60",
             "length",
             "Runtime [s]",
+            "MM type",
+            "s",
+            "Iterations",
             "RMSE [deg]",
         ]
         table = []
@@ -96,7 +78,6 @@ def load_results(data_files, pickle=False):
             "n_sources",
             "snr",
             "n_grid",
-            "name",
             "seed",
             "rep",
             "rt60",
@@ -105,7 +86,34 @@ def load_results(data_files, pickle=False):
         ]
 
         for record in records:
-            entry = [record[field] for field in copy]
+
+            algo_prop = record["name"].split("_")
+            if len(algo_prop) < 2:
+                raise ValueError("Something seems wrong with the data")
+
+            if algo_prop[0] == "SPIRE":
+                mm_type = algo_prop[2]
+                short_name = "SPIREMM"
+            else:
+                mm_type = algo_prop[1]
+                short_name = algo_prop[0]
+
+            if algo_prop[0] in config["mm_algos"]:
+                if len(algo_prop) == 4 and algo_prop[2].startswith("s"):
+                    s = float(algo_prop[2][1:])
+                    it = int(algo_prop[3][2:])
+                else:
+                    s = "NA"
+                    it = int(algo_prop[2][2:])
+            else:
+                s = "NA"
+                it = "NA"
+
+            entry = (
+                [record["name"], short_name]
+                + [record[field] for field in copy]
+                + [mm_type, s, it]
+            )
             for err in record["rmse"]:
                 table.append(entry + [np.degrees(err)])
 
@@ -113,9 +121,11 @@ def load_results(data_files, pickle=False):
         print("Making PANDAS frame...")
         df = pd.DataFrame(table, columns=columns)
 
+        df = df.replace({"Lin": "Linear", "Quad": "Quadratic"})
+
         df.to_pickle(pickle_file)
 
-    return df
+    return df, config
 
 
 if __name__ == "__main__":

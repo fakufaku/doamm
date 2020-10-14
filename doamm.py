@@ -2,8 +2,8 @@ import abc
 from enum import Enum
 
 import numpy as np
-import pyroomacoustics as pra
 
+import pyroomacoustics as pra
 from external_mdsbf import MDSBF
 from tools import geom
 from unit_ls import unit_ls
