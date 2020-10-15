@@ -27,10 +27,10 @@ References
 import json
 
 import numpy as np
-import pyroomacoustics as pra
 from joblib import Parallel, delayed
 from scipy.io import wavfile
 
+import pyroomacoustics as pra
 from doamm import MMMUSIC, MMSRP
 
 # We choose the sample to use
@@ -177,46 +177,51 @@ def main_plot(args):
     df2 = pd.melt(
         df,
         value_vars=["error_man", "error_opt"],
-        value_name="Error",
+        value_name="Error [deg.]",
         var_name="Calibration",
         id_vars=["algo", "angle", "spkr_height"],
     )
 
-    df2["Error"] = df2["Error"].apply(np.degrees)
+    df2["Error [deg.]"] = df2["Error [deg.]"].apply(np.degrees)
     df2["Calibration"] = df2["Calibration"].replace(
         {"error_man": "Manual", "error_opt": "Optimized"}
+    )
+    df2["algo"] = df2["algo"].replace(
+        {
+            "SRP-PHAT": "SRP-PHAT (Grid 10000)",
+            "MUSIC": "MUSIC (Grid 10000)",
+            "MMSRP": "SRP-PHAT (Grid 100 + 30 iter.)",
+            "MMMUSIC": "MUSIC (Grid 100 + 30 iter.)",
+        }
     )
 
     # Ignore WAVES as the algorithm does not work so well
     df2 = df2[df2.algo != "WAVES"]
     df2 = df2.rename(index=str, columns={"algo": "Algorithms"})
 
-    sns.set_style("white")
+    palette = sns.color_palette("viridis", n_colors=4)
+    sns.set_theme(context="paper", style="ticks", font_scale=0.7, palette=palette)
     sns.set_context("paper")
 
-    fig, ax = plt.subplots(figsize=(3.38846 / 2, 1.0))
-
-    pal = sns.cubehelix_palette(
-        2, start=-0.5, rot=0.1, dark=0.4, light=0.7, reverse=True
-    )
+    fig, ax = plt.subplots(figsize=(3.38846, 1.5))
 
     sns.boxplot(
         ax=ax,
-        x="Algorithms",
-        y="Error",
-        hue="Calibration",
-        data=df2,
-        palette=pal,
-        whis=[5, 95],
-        linewidth=0.7,
+        y="Algorithms",
+        x="Error [deg.]",
+        data=df2[df2["Calibration"] == "Optimized"],
+        palette="viridis",
+        order=[
+            "SRP-PHAT (Grid 10000)",
+            "SRP-PHAT (Grid 100 + 30 iter.)",
+            "MUSIC (Grid 10000)",
+            "MUSIC (Grid 100 + 30 iter.)",
+        ],
         fliersize=1.0,
     )
-    plt.legend(framealpha=0.8, frameon=True, loc="upper right", fontsize="xx-small")
-    plt.xlabel("")
-    plt.xticks(fontsize="x-small")
-    plt.ylabel("Error [$^\circ$]", fontsize="x-small")
-    plt.axhline(y=avg_error)
-    sns.despine(ax=ax, offset=5)
+    # plt.legend(framealpha=0.8, frameon=True, loc="upper right", fontsize="xx-small")
+    plt.ylabel("")
+    sns.despine(ax=ax, offset=5, left=True, bottom=True)
     plt.tight_layout(pad=0.1)
 
     if args.save is not None:

@@ -170,7 +170,7 @@ def main(args, df, config):
             loc="center",
         )
 
-        fig.subplots_adjust(right=1 - leg_space / (fig_width - leg_space))
+        fig.subplots_adjust(right=1 - leg_space / (fig_width))
 
         met = metric.split()[0]
         fig.savefig(args.out / f"figure_3_grid_{met}.pdf")
