@@ -324,8 +324,8 @@ def main_plot(args):
     df2 = df2.rename(index=str, columns={"algo": "Algorithms"})
 
     palette = sns.color_palette("viridis", n_colors=4)
-    sns.set_theme(context="paper", style="ticks", font_scale=0.5, palette=palette)
-    sns.set_context("paper")
+    sns.set_theme(context="paper", style="ticks", font_scale=0.7, palette=palette)
+    xlim = 4.0
 
     g = sns.catplot(
         kind="box",
@@ -346,11 +346,11 @@ def main_plot(args):
     g.axes[0, 0].set_title("1 Source")
     g.axes[0, 1].set_title("2 Sources")
 
-    g.fig.set_size_inches(3.38846, 1.75)
+    g.fig.set_size_inches(3.38846, 1.55)
     for r in range(2):
         g.axes[r, 0].set_ylabel("")
-        g.axes[r, 0].set_xlim([0, 4])
-        g.axes[r, 1].set_xlim([0, 4])
+        g.axes[r, 0].set_xlim([0, xlim])
+        g.axes[r, 1].set_xlim([0, xlim])
 
     # plt.ylabel("")
     # plt.xlim([0, 6])
@@ -361,6 +361,20 @@ def main_plot(args):
         plt.savefig(args.save, dpi=300)
 
     plt.show()
+
+    # Compute the number of outliers
+    for src in [1, 2]:
+        err_col = "Error [deg.]"
+        cols = ["Algorithms", "algo_class", err_col]
+        select = (df2["Sources"] == src) & (df2["Calibration"] == "Optimized")
+        outliers = (
+            df2[select & (df2[err_col] > xlim)][cols]
+            .groupby(["Algorithms", "algo_class"])
+            .count()
+        )
+        total = df2[select][cols].groupby(["Algorithms", "algo_class"]).count()
+        print(f"{src} Source: Percentage of sources detected above xlim={xlim}")
+        print(outliers / total)
 
     return df2
 
