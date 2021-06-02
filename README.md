@@ -1,5 +1,5 @@
-DOA Algorithm based on MM Algorithm
-===================================
+Refinement of Direction of Arrival Estimators by Majorization-Minimization Optimization on the Array Manifold
+=============================================================================================================
 
 This repository contains implementation for the algorithms and experiments of the paper [Refinement of Direction of Arrival Estimators by Majorization-Minimization Optimization on the Array Manifold](https://ieeexplore.ieee.org/document/9414798) by Robin Scheibler and Masahito Togami.
 Abstract
@@ -50,7 +50,26 @@ For the experiment on simulated data, run the following.
     python ./doa_experiment_para.py ./doa_experiment_para.py ./config_experiment_s.yml
     python ./make_table1.py ./sim_results/YYYYmmdd-HHMMSS_experiment1_effect_s
 
-Run
----
+For the experiment on recorded data, it is necessary to download the Pyramic dataset [here](https://github.com/fakufaku/pyramic-dataset) 
 
-    python ./doa_experiment.py
+    git clone https://github.com/fakufaku/pyramic-dataset
+    cd pyramic-dataset
+    wget -qO- https://zenodo.org/record/1209563/files/pyramic_segmented_<sample_type>.tar.gz | tar xzv
+    cd ..
+
+Then, run the following
+
+    # Run the experiment
+    python ./doa_experiment_pyramic.py run ./pyramic-dataset/calibration/calibrated_locations.json --sources 1 --output ./sim_results/pyramic_doa_results.json
+
+    # Plot Fig. 2
+    python ./doa_experiment_pyramic.py plot ./sim_results/pyramic_doa_results.json -s figures/pyramic_figure.pdf
+    
+License
+-------
+
+This code is released under [MIT License](https://opensource.org/licenses/MIT).
+
+```
+Copyright 2021 Robin Scheibler and Masahito Togami
+```

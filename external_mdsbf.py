@@ -1,5 +1,28 @@
+# Implementation of MDSBF algorithm
+#
+# Copyright 2020 Masahito Togami and Robin Scheibler
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
 # Author: Masahito Togami
 # Date: Mar 13, 2020
+# Modified by Robin Scheibler
 from __future__ import division, print_function
 
 from pyroomacoustics.doa import *
@@ -7,13 +30,13 @@ from pyroomacoustics.doa import *
 
 class MDSBF(DOA):
     """
-    Class to apply Steered Response Power (SRP) direction-of-arrival (DoA) for 
+    Class to apply Steered Response Power (SRP) direction-of-arrival (DoA) for
     a particular microphone array.
     .. note:: Run locate_source() to apply the SRP-PHAT algorithm.
     Parameters
     ----------
     L: numpy array
-        Microphone array positions. Each column should correspond to the 
+        Microphone array positions. Each column should correspond to the
         cartesian coordinates of a single microphone.
     fs: float
         Sampling frequency.
@@ -24,7 +47,7 @@ class MDSBF(DOA):
     num_src: int
         Number of sources to detect. Default: 1
     mode: str
-        'far' or 'near' for far-field or near-field detection 
+        'far' or 'near' for far-field or near-field detection
         respectively. Default: 'far'
     r: numpy array
         Candidate distances from the origin. Default: np.ones(1)
@@ -70,7 +93,7 @@ class MDSBF(DOA):
 
     def _process_org(self, X):
         """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
+        Perform SRP-PHAT for given frame in order to estimate steered response
         spectrum.
         """
 
@@ -117,9 +140,9 @@ class MDSBF(DOA):
         ----------
         X: array_like, shape (n_channels, n_frequency, n_frames)
             The multichannel STFT of the microphone signals
-            Set of signals in the frequency (RFFT) domain for current 
-            frame. Size should be M x F x S, where M should correspond to the 
-            number of microphones, F to nfft/2+1, and S to the number of snapshots 
+            Set of signals in the frequency (RFFT) domain for current
+            frame. Size should be M x F x S, where M should correspond to the
+            number of microphones, F to nfft/2+1, and S to the number of snapshots
             (user-defined). It is recommended to have S >> M.
         """
         from scipy.spatial import KDTree, cKDTree
@@ -158,7 +181,7 @@ class MDSBF(DOA):
 
     def _process(self, X):
         """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
+        Perform SRP-PHAT for given frame in order to estimate steered response
         spectrum.
         """
 

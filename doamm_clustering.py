@@ -1,8 +1,29 @@
+# This file converts a bunch of files from yaml to json
+#
+# Copyright 2020 Robin Scheibler
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
 from enum import Enum
 
 import numpy as np
-
 import pyroomacoustics as pra
+
 from external_mdsbf import MDSBF
 from tools import geom
 from unit_ls import unit_ls
@@ -195,7 +216,14 @@ class DOAMM(pra.doa.DOA):
             dim = L.shape[0]
 
         super().__init__(
-            L, fs, nfft, c=c, num_src=num_src, dim=dim, *args, **kwargs,
+            L,
+            fs,
+            nfft,
+            c=c,
+            num_src=num_src,
+            dim=dim,
+            *args,
+            **kwargs,
         )
 
         # differential microphone locations (for x-corr measurements)
@@ -231,7 +259,13 @@ class DOAMM(pra.doa.DOA):
         return doa_mm_cost(qs, clusters, mics, wavenumbers, data, beta=self.beta)
 
     def _recompute_centers(
-        self, qs, clusters, mics, wavenumbers, data, n_iter=1,
+        self,
+        qs,
+        clusters,
+        mics,
+        wavenumbers,
+        data,
+        n_iter=1,
     ):
         """
         Parameters
@@ -386,9 +420,9 @@ class DOAMM(pra.doa.DOA):
         ----------
         X: array_like, shape (n_channels, n_frequency, n_frames)
             The multichannel STFT of the microphone signals
-            Set of signals in the frequency (RFFT) domain for current 
-            frame. Size should be M x F x S, where M should correspond to the 
-            number of microphones, F to nfft/2+1, and S to the number of snapshots 
+            Set of signals in the frequency (RFFT) domain for current
+            frame. Size should be M x F x S, where M should correspond to the
+            number of microphones, F to nfft/2+1, and S to the number of snapshots
             (user-defined). It is recommended to have S >> M.
         """
         n_dim = self.dim

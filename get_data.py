@@ -21,6 +21,7 @@
 This script can be used to download the data used in the experiments.
 """
 import os
+
 from pyroomacoustics.datasets.utils import download_uncompress
 
 url_data = "https://zenodo.org/record/3066489/files/cmu_arctic_concat15.tar.gz"

@@ -1,13 +1,36 @@
+# Implementation of SPIRE-MM algorithm
+#
+# Copyright 2020 Masahito Togami and Robin Scheibler
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+#
 # Author: Masahito Togami
 # Date: Mar 13, 2020
+# Modified by Robin Scheibler
 from __future__ import division, print_function
 
+import pyroomacoustics.doa as doa
 import scipy.spatial as spatial
+from pyroomacoustics.doa import *
 
 import localization.generate_steering_vector as gsv
-import pyroomacoustics.doa as doa
 from doamm import SurrogateType
-from pyroomacoustics.doa import *
 from tools import arrays, geom, metrics
 from unit_ls import unit_ls
 
@@ -141,13 +164,13 @@ class ModeVector2(object):
 
 class SPIRE_MM(DOA):
     """
-    Class to apply SPIRE_MM (SPIRE_MM) direction-of-arrival (DoA) for 
+    Class to apply SPIRE_MM (SPIRE_MM) direction-of-arrival (DoA) for
     a particular microphone array.
     .. note:: Run locate_source() to apply the SRP-PHAT algorithm.
     Parameters
     ----------
     L: numpy array
-        Microphone array positions. Each column should correspond to the 
+        Microphone array positions. Each column should correspond to the
         cartesian coordinates of a single microphone.
     fs: float
         Sampling frequency.
@@ -158,7 +181,7 @@ class SPIRE_MM(DOA):
     num_src: int
         Number of sources to detect. Default: 1
     mode: str
-        'far' or 'near' for far-field or near-field detection 
+        'far' or 'near' for far-field or near-field detection
         respectively. Default: 'far'
     r: numpy array
         Candidate distances from the origin. Default: np.ones(1)
@@ -254,7 +277,7 @@ class SPIRE_MM(DOA):
 
     def _process(self, X):
         """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
+        Perform SRP-PHAT for given frame in order to estimate steered response
         spectrum.
         """
         # 周波数毎に実施する
@@ -460,13 +483,13 @@ class SPIRE_MM(DOA):
 
 class SPIRE_MM_CIRCULAR(DOA):
     """
-    Class to apply SPIRE_MM (SPIRE_MM) direction-of-arrival (DoA) for 
+    Class to apply SPIRE_MM (SPIRE_MM) direction-of-arrival (DoA) for
     a particular microphone array.
     .. note:: Run locate_source() to apply the SRP-PHAT algorithm.
     Parameters
     ----------
     L: numpy array
-        Microphone array positions. Each column should correspond to the 
+        Microphone array positions. Each column should correspond to the
         cartesian coordinates of a single microphone.
     fs: float
         Sampling frequency.
@@ -477,7 +500,7 @@ class SPIRE_MM_CIRCULAR(DOA):
     num_src: int
         Number of sources to detect. Default: 1
     mode: str
-        'far' or 'near' for far-field or near-field detection 
+        'far' or 'near' for far-field or near-field detection
         respectively. Default: 'far'
     r: numpy array
         Candidate distances from the origin. Default: np.ones(1)
@@ -562,7 +585,7 @@ class SPIRE_MM_CIRCULAR(DOA):
 
     def _process(self, X):
         """
-        Perform SRP-PHAT for given frame in order to estimate steered response 
+        Perform SRP-PHAT for given frame in order to estimate steered response
         spectrum.
         """
         # 周波数毎に実施する
@@ -1373,7 +1396,12 @@ def coplaner_doa_estimation_one_iteration(
     alpha = np.reshape(alpha, (freq_num, frame_num, pair_num))
 
     lamb, p, x_non_const_power = coplanar_least_squares_st_norm_one(
-        a, r, alpha, zero_feature_index=zero_feature_index, iter_num=iter_num2, eps=eps,
+        a,
+        r,
+        alpha,
+        zero_feature_index=zero_feature_index,
+        iter_num=iter_num2,
+        eps=eps,
     )
 
     # lamb: batch
