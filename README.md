@@ -2,6 +2,7 @@ Refinement of Direction of Arrival Estimators by Majorization-Minimization Optim
 =============================================================================================================
 
 This repository contains implementation for the algorithms and experiments of the paper [Refinement of Direction of Arrival Estimators by Majorization-Minimization Optimization on the Array Manifold](https://ieeexplore.ieee.org/document/9414798) by Robin Scheibler and Masahito Togami.
+
 Abstract
 --------
 
